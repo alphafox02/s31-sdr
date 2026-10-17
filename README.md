@@ -3,8 +3,10 @@
 **SDR firmware for the Espressif ESP32-S31**, streaming I/Q as VITA-49 over
 Gigabit Ethernet.
 
-Work in progress. This first version builds and boots on Espressif's
-**ESP32-S31 Function CoreBoard** and brings up the 2.4 GHz receiver.
+Work in progress. On Espressif's **ESP32-S31 Function CoreBoard** it brings
+up the 2.4 GHz receiver and captures 80 MS/s, 10-bit I/Q from the chip's
+sample-dump engine. For now it prints each capture's signal power and AGC
+gain index on the console once a second.
 
 ## Build
 
