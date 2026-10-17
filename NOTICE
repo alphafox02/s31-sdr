@@ -1,0 +1,10 @@
+s31-sdr
+Copyright 2026 CEMAXECUTER LLC
+
+This product is licensed under the Apache License, Version 2.0 (LICENSE).
+
+It is written from Espressif's public ESP-IDF headers and documentation and
+from analysis of the RF test library (librftest.a) that ships with ESP-IDF.
+At build time it links ESP-IDF (Apache-2.0) and Espressif's precompiled PHY,
+Wi-Fi and RF test libraries, which are distributed by Espressif under their
+own license terms and are not part of this repository.

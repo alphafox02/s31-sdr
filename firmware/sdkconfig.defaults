@@ -1,0 +1,47 @@
+# Copyright 2026 CEMAXECUTER LLC
+# SPDX-License-Identifier: Apache-2.0
+CONFIG_IDF_TARGET="esp32s31"
+
+# Console on UART0 (the port marked UART, a CP2102N bridge). The USB
+# Serial/JTAG console drops output when its FIFO fills, and a capture stalls
+# both cores with interrupts off; UART does not lose lines. Flash over UART too.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# 16 MB flash, cores at full speed (the 10-bit packer and sender need it).
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_320=y
+
+# Octal PSRAM (the board has 16 MB). 250 MHz puts MPLL at 500 MHz, from which
+# the EMAC also derives the 125 MHz RGMII clock; at 200 MHz MPLL runs at 400 and
+# Ethernet init fails ("EMAC out frequency cannot be used").
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_250M=y
+
+# RF cert/test path: links librftest (adctrig, set_dump_mode, loop_dump_test)
+# and enables phy_printf.
+CONFIG_ESP_PHY_ENABLE_CERT_TEST=y
+CONFIG_ESP_PHY_DEBUG=y
+
+# The capture runs with interrupts off and the other core stalled (the engine
+# owns the top 128 KB of SRAM while it runs). If its done-poll ever runs to
+# its ~1 s timeout, the interrupt watchdog must not fire.
+# CONFIG_ESP_INT_WDT is not set
+
+# Gigabit Ethernet: on-chip EMAC + Motorcomm YT8531 over RGMII (the IDF's own
+# S31 Ethernet CI configuration), set up by espressif/ethernet_init.
+CONFIG_ETH_ENABLED=y
+CONFIG_ETH_USE_ESP32_EMAC=y
+CONFIG_ETHERNET_INTERNAL_SUPPORT=y
+CONFIG_ETHERNET_PHY_YT8531=y
+
+# The VRT sender transmits raw frames while lwIP also transmits (ARP, ICMP);
+# without the transmit mutex the two race in the EMAC driver and transmit
+# stalls a few seconds into a stream.
+CONFIG_ETH_TRANSMIT_MUTEX=y
+
+# Speed over size: the sender task handles every sample and frame at
+# 55k frames/s on one core.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# The -O2 image no longer fits the 1 MB single-app partition.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y

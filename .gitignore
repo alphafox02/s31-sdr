@@ -1,0 +1,30 @@
+# ESP-IDF build output
+build/
+sdkconfig
+sdkconfig.old
+*.bin
+*.elf
+*.map
+
+# flash backups and captures (never commit)
+*.img
+*.sigmf-data
+*.sigmf-meta
+
+# editor / OS
+.vscode/
+*.swp
+.DS_Store
+
+# scratch
+scratch/
+__pycache__/
+
+# local I/Q captures (never commit)
+captures/
+
+# local network addresses (never commit)
+firmware/main/local_net.h
+
+# downloaded by the IDF component manager
+firmware/managed_components/
