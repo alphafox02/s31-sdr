@@ -1,7 +1,8 @@
 /* Copyright 2026 CEMAXECUTER LLC
  * SPDX-License-Identifier: Apache-2.0
  *
- * s31-sdr: capture 10-bit I/Q from the ESP32-S31's receiver.
+ * s31-sdr: capture 10-bit I/Q from the ESP32-S31's receiver, and bring up
+ * Gigabit Ethernet (net.c).
  *
  * The RF test library's capture path needs the PHY receiving normally: Wi-Fi
  * STA up, promiscuous, fixed channel, no power save. rftest_open_clk() turns
@@ -22,6 +23,7 @@
 #include "esp_task_wdt.h"
 #include "esp_ipc_isr.h"
 #include "s31_dump.h"
+#include "net.h"
 
 extern void rftest_open_clk(void);
 extern void adctrig(int count, int mode, int a2, int a3, int a4,
@@ -102,5 +104,6 @@ void app_main(void)
     esp_task_wdt_deinit();
     bring_up_phy();
     printf("s31-sdr: receiver up on channel %d (%d MHz)\n", START_CHANNEL, 2407 + 5 * START_CHANNEL);
+    s31_net_start();
     xTaskCreatePinnedToCore(capture_task, "capture", 8192, NULL, 10, NULL, 1);
 }

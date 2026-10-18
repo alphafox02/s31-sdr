@@ -1,0 +1,10 @@
+/* Copyright 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Copy to local_net.h (gitignored) and set the board's address and the
+ * host's. S31_GW is the host that receives the stream, not a router.
+ */
+#pragma once
+#define S31_IP       "192.168.50.20"
+#define S31_NETMASK  "255.255.255.0"
+#define S31_GW       "192.168.50.1"

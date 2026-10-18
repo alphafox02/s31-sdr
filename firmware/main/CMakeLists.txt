@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # WHOLE_ARCHIVE keeps dump_bank.c (no exported symbols) so its memory
 # reservation is not dropped by the linker.
-idf_component_register(SRCS "main.c" "dump_bank.c"
+idf_component_register(SRCS "main.c" "dump_bank.c" "net.c"
                        INCLUDE_DIRS "." "../include"
-                       REQUIRES nvs_flash esp_event esp_netif esp_wifi esp_phy esp_hw_support
+                       REQUIRES nvs_flash esp_event esp_netif esp_wifi esp_phy esp_hw_support esp_eth lwip
                        WHOLE_ARCHIVE)

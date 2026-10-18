@@ -1,0 +1,5 @@
+## Copyright 2026 CEMAXECUTER LLC
+## SPDX-License-Identifier: Apache-2.0
+dependencies:
+  espressif/ethernet_init:
+    version: "^1.3.0"
