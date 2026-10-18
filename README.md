@@ -156,6 +156,10 @@ the AGC switch, and tuning, gain and AGC go to the board over VITA 49.2.
 Without `gain_range` the slider still works, but it spans SoapyVITA49's
 default of about -256 to 256, of which the board only uses 0-127.
 
+If you want to measure the stream directly (rate, gaps, dropped packets,
+spectrum orientation, or a long logged run), the scripts in [host/](host/)
+do that. Run them with your normal Python, not the one ESP-IDF sets up.
+
 ## Read before use
 
 - **Receive only.** The firmware starts the ESP32-S31's Wi-Fi radio so it
@@ -187,13 +191,15 @@ default of about -256 to 256, of which the board only uses 0-127.
 ## What's where
 
 - `firmware/` - the ESP-IDF application.
+- `host/` - Python tools for checking the stream.
 - `tests/` - a host-side unit test for the DMA ring logic.
 - `docs/` - the stream and control interface.
 
 ## Contributing
 
 Issues and pull requests are welcome. When something doesn't work, include
-the console's `@@STREAM` lines; they say more than a description.
+the console's `@@STREAM` lines and the output of
+`host/s31_vrt_check.py --seconds 10`; they say more than a description.
 The DMA ring logic has a host-side test that runs without hardware:
 
 ```sh
