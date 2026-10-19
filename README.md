@@ -21,8 +21,9 @@ Why not 10 bits at 40 MS/s? As CI16 that would take about 1.3 Gbit/s,
 which is more than gigabit Ethernet can carry. So you get the full 10 bits
 at 20 MS/s, or the full 40 MHz at 8 bits.
 
-The stream is continuous, and every packet carries a sample count, so a
-host can tell if anything was lost.
+The stream is continuous. In an 8.5-hour test at 20 MS/s the host received
+1.7 billion packets. There was one short gap of 5 packets (90 µs), and the
+host itself dropped nothing.
 
 You can tune anywhere from 2150 to 2850 MHz in steps of about 57 Hz, and
 retuning doesn't interrupt the stream. The board's front end is designed for
