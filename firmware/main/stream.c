@@ -13,10 +13,10 @@
  * edge near +-11 MHz folds slightly. Packing is a PIE byte zip of the two
  * rings (pack_zip), about 8% of core 1.
  *
- * Capture: modem diag[19:0] carries 10-bit I/Q. PARLIO
- * lanes 0-7 take Q[9:2], lanes 8-15 take I[9:2]: each 16-bit word is one CI8
- * pair, and putting Q first undoes the engine's spectral inversion for free
- * (swapping I and Q mirrors the spectrum). For CI8, PARLIO runs at 40 MHz
+ * Capture: modem diag[19:0] carries 10-bit I/Q. PARLIO lanes 0-7 take
+ * Q[9:2], lanes 8-15 take I[9:2]: each 16-bit word is one CI8 pair, and
+ * putting Q first undoes the engine's spectral inversion for free (swapping
+ * I and Q mirrors the spectrum). For CI8, PARLIO runs at 40 MHz
  * (every other sample of the 80 MS/s bus) into a DMA ring; the start is
  * calibrated against dump-engine shots.
  *
@@ -60,6 +60,13 @@
 
 extern void adctrig(int count, int mode, int a2, int a3, int a4,
                     int a5, int a6, int a7, int s9, int s10);
+
+/* 1: also build the bench-debugging extras: a DMA callback trace, and the
+ * raw register / capture test commands on the text port (see control_task).
+ * They are unauthenticated, so they are off by default. */
+#ifndef S31_DEBUG_CMDS
+#define S31_DEBUG_CMDS 0
+#endif
 
 #define VRT_PORT      4991
 #define STREAM_ID     0x53310001u           /* "S1" + 1 */
@@ -120,22 +127,26 @@ static uint64_t written_now(void) { return dma_pos_written(&ppos); }
 
 static int diag_sig(int n) { return n < 8 ? 118 + n : n < 16 ? 204 + (n - 8) : 154 + (n - 16); }
 
+#if S31_DEBUG_CMDS
 /* first callbacks, for checking the driver's DMA node layout */
 #define NDBG 40
 static volatile uint32_t dbg_off[NDBG], dbg_len[NDBG], dbg_n;
 
-/* Paired software/hardware trace of the RX DMA: per callback, the driver's node (from e->data), the node of the
- * hardware's last completed descriptor, and that descriptor's word 0 (size
- * bits 0-11, received length bits 12-23). tr_start keeps the first 64
- * callbacks of the latest start, tr_roll the latest 256. */
+/* Paired software/hardware trace of the RX DMA: per callback, the driver's
+ * node (from e->data), the node of the hardware's last completed
+ * descriptor, and that descriptor's word 0 (size bits 0-11, received length
+ * bits 12-23). tr_start keeps the first 64 callbacks of the latest start,
+ * tr_roll the latest 256. */
 struct trace_rec { uint32_t cyc; uint16_t sw, hw; uint32_t dw0; };
 static struct trace_rec tr_start[64], tr_roll[256];
 static volatile uint32_t tr_start_n, tr_roll_n;
 
 static IRAM_ATTR bool in_sram(uint32_t a) { return a >= 0x2F000000u && a < 0x2F080000u; }
+#endif
 
 static bool IRAM_ATTR on_partial(parlio_rx_unit_handle_t u, const parlio_rx_event_data_t *e, void *arg)
 {
+#if S31_DEBUG_CMDS
     {
         struct trace_rec t = { .cyc = esp_cpu_get_cycle_count(), .hw = 0xFFFF, .dw0 = 0 };
         t.sw = (uint16_t)(((uintptr_t)e->data - (uintptr_t)ring) / NODE);
@@ -150,6 +161,7 @@ static bool IRAM_ATTR on_partial(parlio_rx_unit_handle_t u, const parlio_rx_even
         tr_roll[tr_roll_n++ & 255] = t;
     }
     if (dbg_n < NDBG) { dbg_off[dbg_n] = (uintptr_t)e->data - (uintptr_t)ring; dbg_len[dbg_n] = e->recv_bytes; dbg_n++; }
+#endif
     /* The write position comes from the hardware's last completed
      * descriptor, not from e->data: after a calibration restart one stale
      * interrupt can put the driver's node index a node ahead of the DMA for
@@ -186,7 +198,7 @@ static void own_dump(int count)
     esp_ipc_isr_stall_other_cpu();
     S31_REG(S31_TCM_DUMP_OWNER) = 0xFF000000u;
     uint32_t c = S31_REG(S31_DUMP_CTRL);
-    c &= ~(S31_DUMP_CTRL_COUNT_M | (1u << 17) | S31_DUMP_CTRL_TRIG | S31_DUMP_CTRL_ENABLE);
+    c &= ~(S31_DUMP_CTRL_COUNT_M | S31_DUMP_CTRL_ABORT | S31_DUMP_CTRL_TRIG | S31_DUMP_CTRL_ENABLE);
     c |= (uint32_t)count;
     S31_REG(S31_DUMP_CTRL) = c | S31_DUMP_CTRL_ENABLE;
     S31_REG(S31_DUMP_CTRL) = c | S31_DUMP_CTRL_ENABLE | S31_DUMP_CTRL_TRIG;
@@ -268,7 +280,13 @@ static void frame_header(uint8_t *f, const uint8_t dst_mac[6], const uint8_t src
     udp[4] = (8 + vrt_len) >> 8; udp[5] = (8 + vrt_len) & 0xFF; udp[6] = udp[7] = 0;
 }
 
-static volatile double lo_hz;
+/* The LO frequency: set by the control tasks and the monitor on core 0,
+ * read by the sender on core 1. A double is two words on this CPU, so every
+ * access goes through lo_get / lo_put and never sees half an update. */
+static double lo_hz;
+static portMUX_TYPE lo_mux = portMUX_INITIALIZER_UNLOCKED;
+static double lo_get(void) { taskENTER_CRITICAL(&lo_mux); double f = lo_hz; taskEXIT_CRITICAL(&lo_mux); return f; }
+static void lo_put(double f) { taskENTER_CRITICAL(&lo_mux); lo_hz = f; taskEXIT_CRITICAL(&lo_mux); }
 static volatile int ctx_now;           /* set to send a context packet immediately */
 
 /* ---- Receive gain ----
@@ -390,7 +408,7 @@ static int set_width(int mhz)
     }
     chan_mhz = mhz;
     double act;
-    tune_hz(lo_hz, &act);                    /* re-set the channel with the new width */
+    tune_hz(lo_get(), &act);                 /* re-set the channel with the new width */
     ctx_now = 1;
     return 0;
 }
@@ -406,7 +424,7 @@ static bool set_lo(double f)
     uint32_t w = sdm_word(f);
     sdm_write(w);
     if (!cap_scan()) return false;
-    lo_hz = sdm_hz(w);
+    lo_put(sdm_hz(w));
     apply_gain();
     ctx_now = 1;
     return true;
@@ -421,11 +439,11 @@ static int tune_hz(double f, double *actual)
 {
     int ret = -1;
     if (f >= TUNE_MIN_HZ && f <= TUNE_MAX_HZ) {
-        double prev = lo_hz;
+        double prev = lo_get();
         if (set_lo(f)) ret = 0;
         else set_lo(prev);
     }
-    *actual = lo_hz;
+    *actual = lo_get();
     return ret;
 }
 
@@ -444,10 +462,7 @@ static int tune_hz(double f, double *actual)
  *   ring / trace    dump the raw capture ring / DMA callback trace
  *   stall <us>      hold the capture core, to test ring-lap recovery
  *   check           the calibration's bit-exact test on the running stream
- * They are unauthenticated, so they are off by default. */
-#ifndef S31_DEBUG_CMDS
-#define S31_DEBUG_CMDS 0
-#endif
+ */
 /* One owner of the radio settings at a time: the text and VITA 49.2
  * controls and the monitor. */
 static SemaphoreHandle_t radio_mutex;
@@ -464,12 +479,13 @@ static void monitor_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(500));
         xSemaphoreTake(radio_mutex, portMAX_DELAY);
         mon_checks++;
-        if (sdm_read() != sdm_word(lo_hz)) {
+        double f = lo_get();
+        if (sdm_read() != sdm_word(f)) {
             mon_sdm++;
-            set_lo(lo_hz);
+            set_lo(f);
         } else if (!pll_locked()) {
             mon_relock++;
-            if (!cap_scan()) set_lo(lo_hz);
+            if (!cap_scan()) set_lo(f);
         }
         if (gain_idx >= 0) {
             uint32_t r = REG_READ(AGC_FORCE_REG);
@@ -484,7 +500,10 @@ static void control_task(void *arg)
     int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     struct sockaddr_in me = { .sin_family = AF_INET, .sin_port = htons(VRT_PORT - 1),
                               .sin_addr.s_addr = htonl(INADDR_ANY) };
-    bind(s, (struct sockaddr *)&me, sizeof(me));
+    if (s < 0 || bind(s, (struct sockaddr *)&me, sizeof(me)) != 0) {
+        printf("stream: text control port %d unavailable\n", VRT_PORT - 1);
+        vTaskDelete(NULL);
+    }
     char buf[64];
     for (;;) {
         struct sockaddr_in from; socklen_t fl = sizeof(from);
@@ -509,11 +528,11 @@ static void control_task(void *arg)
             printf("stream: tune %.6f MHz -> %s\n", f / 1e6, reply);
         } else if (sscanf(buf, "bw %d", &ch) == 1 && (ch == 20 || ch == 40)) {
             int t = set_width(ch);
-            snprintf(reply, sizeof(reply), "%s %d MHz, LO %.3f", t == 0 ? "ok" : "failed, now", chan_mhz, lo_hz / 1e6);
+            snprintf(reply, sizeof(reply), "%s %d MHz, LO %.3f", t == 0 ? "ok" : "failed, now", chan_mhz, lo_get() / 1e6);
         } else if (strncmp(buf, "status", 6) == 0) {
             snprintf(reply, sizeof(reply), "LO %.3f %s, cap %d, gain %d, monitor: %" PRIu32 " checks, synth restored %"
                      PRIu32 ", relocked %" PRIu32 ", gain re-forced %" PRIu32 ", DMA laps %" PRIu32 "/%" PRIu32,
-                     lo_hz, pll_locked() ? "locked" : "UNLOCKED", pll_cap, gain_idx, mon_checks, mon_sdm, mon_relock,
+                     lo_get(), pll_locked() ? "locked" : "UNLOCKED", pll_cap, gain_idx, mon_checks, mon_sdm, mon_relock,
                      mon_gain, ppos.laps, bits10 ? cam_lsb_laps() : 0);
         } else if (strncmp(buf, "gain auto", 9) == 0) {
             set_gain(-1);
@@ -623,7 +642,7 @@ static int build_context(uint8_t *vrt, int count, uint64_t sample)
     be32(p + 4, STREAM_ID); be64(p + 8, sample); w = 4;
     be32(p + 4 * w, (1u << 29) | (1u << 27) | (1u << 23) | (1u << 21) | (1u << 16) | (1u << 15)); w++;  /* CIF0 */
     be64(p + 4 * w, fix20(chan_mhz * 1e6)); w += 2;    /* bandwidth: receive filter */
-    be64(p + 4 * w, fix20(lo_hz)); w += 2;             /* RF reference frequency */
+    be64(p + 4 * w, fix20(lo_get())); w += 2;          /* RF reference frequency */
     be32(p + 4 * w, gain_word()); w++;                 /* gain: stage 1 = index, -1 = AGC */
     be64(p + 4 * w, fix20(rate_hz)); w += 2;           /* sample rate */
     be32(p + 4 * w, se_word()); w++;                   /* State/Event: AGC or manual */
@@ -729,6 +748,7 @@ static bool pack_selftest(void)
 static bool learn_host_mac(uint8_t mac[6])
 {
     int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s < 0) return false;
     struct sockaddr_in to = { .sin_family = AF_INET, .sin_port = htons(VRT_PORT + 1) };
     to.sin_addr.s_addr = esp_ip4addr_aton(S31_GW);
     struct netif *nif = esp_netif_get_netif_impl(esp_netif_get_handle_from_ifkey("ETH_DEF"));
@@ -772,9 +792,11 @@ static void sender_task(void *arg)
     int64_t n = 0;                          /* 10-bit: next PARLIO sample index */
     uint64_t cyc_pack = 0, cyc_tx = 0, cyc_pack0 = 0, cyc_tx0 = 0;
     esp_err_t last_err = ESP_OK;
+#if S31_DEBUG_CMDS
     printf("stream: first DMA nodes (offset/len):");
     for (int i = 0; i < NDBG && i < (int)dbg_n; i++) printf(" %" PRIu32 "/%" PRIu32, dbg_off[i], dbg_len[i]);
     printf("\n");
+#endif
     rd = written_now();                 /* start from "now", not from before ARP */
     if (bits10) {
         int64_t pw = (int64_t)(written_now() / 2), cw = (int64_t)cam_lsb_written() / 2 - cam_off;
@@ -791,10 +813,12 @@ static void sender_task(void *arg)
         prev = now;
         if (now >= next_ctx || ctx_now) {
             ctx_now = 0;
-            int n = build_context(cframe + 42, ccount++, sample);
-            frame_header(cframe, host_mac, my_mac, n);
+            int clen = build_context(cframe + 42, ccount++, sample);
+            frame_header(cframe, host_mac, my_mac, clen);
+            /* esp_eth_transmit fails while every transmit descriptor is in
+             * use; retry until one frees (here and for data frames) */
             int ct = 0;
-            while (esp_eth_transmit(eth, cframe, 42 + n) != ESP_OK && ++ct < 20000) {}
+            while (esp_eth_transmit(eth, cframe, 42 + clen) != ESP_OK && ++ct < 20000) {}
             if (ct >= 20000) ctx_fail++;
             next_ctx = now + 100000;
         }
@@ -960,7 +984,10 @@ static void vrt_control_task(void *arg)
     int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     struct sockaddr_in me = { .sin_family = AF_INET, .sin_port = htons(VRT_PORT),
                               .sin_addr.s_addr = htonl(INADDR_ANY) };
-    bind(s, (struct sockaddr *)&me, sizeof(me));
+    if (s < 0 || bind(s, (struct sockaddr *)&me, sizeof(me)) != 0) {
+        printf("stream: VITA 49.2 control port %d unavailable\n", VRT_PORT);
+        vTaskDelete(NULL);
+    }
     static uint8_t in[512], out[256];
     uint32_t acount = 0;
     for (;;) {
@@ -1047,7 +1074,7 @@ static void vrt_control_task(void *arg)
             uint32_t want = cif0 & (CIF0_BW | CIF0_RF | CIF0_GAIN | CIF0_RATE | CIF0_SE | CIF0_FMT);
             be32(out + o, want); o += 4;
             if (want & CIF0_BW)   { be64(out + o, fix20(chan_mhz * 1e6)); o += 8; }
-            if (want & CIF0_RF)   { be64(out + o, fix20(lo_hz)); o += 8; }
+            if (want & CIF0_RF)   { be64(out + o, fix20(lo_get())); o += 8; }
             if (want & CIF0_GAIN) { be32(out + o, gain_word()); o += 4; }
             if (want & CIF0_RATE) { be64(out + o, fix20(rate_hz)); o += 8; }
             if (want & CIF0_SE)   { be32(out + o, se_word()); o += 4; }
@@ -1068,7 +1095,7 @@ void s31_stream_main(int channel, int bits)
     cmp_n = bits10 ? 120 : CMP_N;               /* (DUMP_N - 3) / 4 = 127 at stride 4 */
     printf("\n== s31-sdr: VITA-49 %s stream, %.0f MS/s ==\n", bits10 ? "CI16 (10-bit)" : "CI8",
            rate_hz / 1e6);
-    lo_hz = (2407.0 + 5.0 * channel) * 1e6;
+    lo_put((2407.0 + 5.0 * channel) * 1e6);
     taskENTER_CRITICAL(&mux);
     esp_ipc_isr_stall_other_cpu();
     adctrig(1023, 0, 0, 1, 0, 0, 0, 0, 0, 0);       /* lane select: diag = dump word */
@@ -1128,7 +1155,9 @@ void s31_stream_main(int channel, int bits)
          * the first node. (Carrying the count across restarts made the
          * sender read the wrong ring offset after a multi-start calibration.) */
         dma_pos_reset(&ppos);
+#if S31_DEBUG_CMDS
         tr_start_n = 0;
+#endif
         if (bits10 && starts > 1) cam_lsb_rephase();
         ESP_ERROR_CHECK(parlio_rx_unit_enable(rx, true));
         for (int k = 0; k < 16; k++) {
@@ -1170,10 +1199,10 @@ void s31_stream_main(int channel, int bits)
         if (!good) { parlio_rx_soft_delimiter_start_stop(rx, deli, false); parlio_rx_unit_disable(rx); }
     }
     if (!good) { printf("stream: calibration failed\n"); return; }
-    /* snap stays allocated for the "check" command */
+    /* snap stays allocated: the debug "check" command reuses it */
 
     eth = s31_net_eth_handle();
-    if (bits10) { double act; tune_hz(lo_hz, &act); }   /* exact word, as the monitor expects */
+    if (bits10) { double act; tune_hz(lo_get(), &act); }   /* exact word, as the monitor expects */
     radio_mutex = xSemaphoreCreateMutex();
     xTaskCreatePinnedToCore(monitor_task, "radiomon", 3072, NULL, 4, NULL, 0);
     stats_q = xQueueCreate(1, sizeof(struct stats));

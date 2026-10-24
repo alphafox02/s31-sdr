@@ -4,7 +4,7 @@
 """Check the ESP32-S31 VITA-49 stream: rate, continuity, context, spectrum.
 
 Listens on a UDP port (default 4991) for the firmware's VRT packets:
-  data    type 1, stream ID, TSF sample count, CI8 payload
+  data    type 1, stream ID, TSF sample count, CI8 or CI16 payload
   context type 4, CIF0 = bandwidth, RF reference, sample rate, data format
 Reports packet and sample rates, 4-bit packet-counter breaks, sample-count
 gaps, the decoded context, kernel UDP drops, and optionally writes a spectrum

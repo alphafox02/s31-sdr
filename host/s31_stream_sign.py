@@ -4,10 +4,12 @@
 """Check the spectral orientation of the live VITA-49 stream across LOs.
 
 Retunes the board over its control port ("ch N"), and for each channel keeps
-1 s of CI8 data that arrives after a context packet reports the new RF
+1 s of data that arrives after a context packet reports the new RF
 reference. External signals sit at fixed absolute frequencies, so mapping each
 LO's max-hold spectrum with the right sign (absolute = LO + offset for a
-correctly oriented stream) makes the overlaps agree.
+correctly oriented stream) makes the overlaps agree. The sample format and
+rate come from the board's context packets, and the board is tuned back to
+its starting frequency at the end.
 """
 import argparse
 import socket
@@ -32,6 +34,17 @@ def rf_ref_of(ctx):
     if cif0 & (1 << 29): i += 8
     if cif0 & (1 << 28): i += 8
     return fix20(ctx[i:i + 8]) if cif0 & (1 << 27) else None
+
+
+def stream_format(data_sock):
+    """(RF reference, sample rate, item bits) from the next context packet,
+    in the layout this firmware sends (CIF0: bandwidth, RF, gain, rate,
+    State/Event, format)."""
+    data_sock.settimeout(2.0)
+    while True:
+        p = data_sock.recv(2048)
+        if p[0] >> 4 == 4 and len(p) >= 60:
+            return fix20(p[28:36]), fix20(p[40:48]), (struct.unpack('>I', p[52:56])[0] & 0x3F) + 1
 
 
 def capture(data_sock, want_lo, seconds, rate, bits):
@@ -78,9 +91,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--board', required=True, help="board's IPv4 address on the link")
     ap.add_argument('--port', type=int, default=4991)
-    ap.add_argument('--channels', default='4,6,8')
-    ap.add_argument('--rate', type=float, default=40e6)
-    ap.add_argument('--bits', type=int, choices=(8, 16), default=8, help='item size (16 = 10-bit CI16 build)')
+    # 5 MHz steps: at 20 MS/s, 10 MHz steps leave too little overlap for a
+    # reliable answer
+    ap.add_argument('--channels', default='3,4,5,6,7,8,9')
     args = ap.parse_args()
 
     data = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -88,15 +101,21 @@ def main():
     data.bind(('0.0.0.0', args.port))
     ctl = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     ctl.settimeout(2.0)
+    start_lo, rate, bits = stream_format(data)
+    print(f'stream: {bits}-bit items, {rate / 1e6:.0f} MS/s, at {start_lo / 1e6:.3f} MHz')
 
     spectra = {}
-    for ch in [int(c) for c in args.channels.split(',')]:
-        ctl.sendto(f'ch {ch}'.encode(), (args.board, args.port - 1))
-        print(f'ch{ch}: board replied {ctl.recv(64).decode()}')
-        lo = (2407 + 5 * ch) * 1e6
-        spectra[lo] = capture(data, lo, 1.0, args.rate, args.bits)
+    try:
+        for ch in [int(c) for c in args.channels.split(',')]:
+            ctl.sendto(f'ch {ch}'.encode(), (args.board, args.port - 1))
+            print(f'ch{ch}: board replied {ctl.recv(64).decode()}')
+            lo = (2407 + 5 * ch) * 1e6
+            spectra[lo] = capture(data, lo, 1.0, rate, bits)
+    finally:
+        ctl.sendto(f'f {start_lo:.0f}'.encode(), (args.board, args.port - 1))
+        print(f'tuned back to {start_lo / 1e6:.3f} MHz: {ctl.recv(128).decode()}')
 
-    off = np.fft.fftshift(np.fft.fftfreq(NFFT, 1 / args.rate))
+    off = np.fft.fftshift(np.fft.fftfreq(NFFT, 1 / rate))
     keep = np.abs(off) <= HALF_SPAN
     los = sorted(spectra)
     grid = np.arange(los[0] - HALF_SPAN, los[-1] + HALF_SPAN, 50e3)

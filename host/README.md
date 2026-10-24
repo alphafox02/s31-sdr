@@ -7,9 +7,10 @@ not ESP-IDF's. The first two need numpy, and `--png` also needs matplotlib.
   sample rates, packet-counter breaks, sample-count gaps, decoded context,
   kernel UDP drops, and an optional spectrum. Works with either build.
 - `s31_stream_sign.py --board <ip>` - retunes across a few channels and
-  checks that the spectrum is the right way round. Its defaults suit the
-  8-bit build; for the default 10-bit build add `--bits 16 --rate 20e6`,
-  which also checks the 10-bit sample layout.
+  checks that the spectrum is the right way round (and, in the 10-bit
+  build, the sample layout), then tunes the board back to where it was.
+  It reads the format and rate from the stream, so it works with either
+  build.
 - `s31_soak.py --board <ip> --log <file> [--hours 12]` - one line a minute
   for long runs: packets, gaps, drops and the board's `status`.
 

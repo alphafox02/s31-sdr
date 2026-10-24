@@ -1,12 +1,13 @@
 /* Copyright 2026 CEMAXECUTER LLC
  * SPDX-License-Identifier: Apache-2.0
  *
- * LCD_CAM camera input used as a free-running 8- or 16-bit parallel capture, for the
- * I/Q low bits next to PARLIO. PCLK comes from a pad: either PARLIO's sample clock looped back,
- * or (clk_div != 0) this unit's own clock output, PLL_F160M / clk_div, which
- * PARLIO then takes as its external clock from the same pad. DE and
- * VSYNC are tied high (VSYNC low = no capture), EOF by byte count, AXI GDMA
- * into a ring of equal nodes. Clock/reset sequence as the IDF DVP driver.
+ * LCD_CAM camera input used as a free-running 8- or 16-bit parallel
+ * capture, for the I/Q low bits next to PARLIO. PCLK comes from a pad:
+ * either an external sample clock, or (clk_div != 0) this unit's own clock
+ * output, PLL_F160M / clk_div, which PARLIO then takes as its external
+ * clock from the same pad. DE and VSYNC are tied high (VSYNC low = no
+ * capture), EOF by byte count, AXI GDMA into a ring of equal nodes.
+ * Clock/reset sequence as the IDF DVP driver.
  */
 #include <stdio.h>
 #include "driver/gpio.h"
