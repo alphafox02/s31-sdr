@@ -11,3 +11,5 @@ instructions are in the [top-level README](../README.md#quick-start).
 - `net.c` - Ethernet (EMAC + YT8531) with a static address.
 - `dump_bank.c` - reserves the receiver's sample bank in SRAM.
 - `local_net.h.example` - copy to `local_net.h` and set the addresses.
+- `flash.py` - sets the addresses, builds, finds the board (and only the
+  board), flashes it and checks the stream.

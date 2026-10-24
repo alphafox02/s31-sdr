@@ -79,54 +79,70 @@ That lasts until the interface goes down. To keep it, set the same manual
 IPv4 address in your network settings. If you run a firewall, allow
 incoming UDP on ports 4990 and 4991 from the board.
 
-**3. Set the addresses, then build and flash** with the board on USB and
+**3. Clone, build, flash and check the stream** with the board on USB and
 Ethernet:
 
 ```sh
 git clone https://github.com/alphafox02/s31-sdr.git
 cd s31-sdr/firmware
-cp main/local_net.h.example main/local_net.h    # then set the addresses
 . ~/esp/esp-idf/export.sh
-idf.py --preview set-target esp32s31
-idf.py build
-idf.py -p <UART port> flash monitor
+python flash.py --board-ip 192.168.50.20 --host-ip 192.168.50.1
 ```
 
-The UART port is usually `/dev/ttyUSB0`, or a higher number if you have
-other USB-serial adapters; `dmesg` tells you. Once the board is streaming,
-the console shows a line like this every second:
+`flash.py` writes the addresses, builds the firmware, finds the board,
+flashes it and then waits for the stream. When everything works it ends
+with:
+
+```
+streaming: 20.00 MS/s (16-bit items, board reports 20 MS/s) at 2437.000 MHz
+```
+
+After that, `python flash.py` on its own rebuilds and reflashes with the
+same addresses.
+
+### About the addresses
+
+The board has no DHCP; its address is built into the firmware.
+`--board-ip` and `--host-ip` are saved to `firmware/main/local_net.h`,
+which is gitignored, so your addresses never end up in the repository. In
+that file `S31_GW` is your computer, not a router: it's where the stream
+goes. To change addresses, run `flash.py` again with new ones.
+
+When the board boots, it looks up your computer's MAC address and then
+starts streaming to UDP port 4991. If your computer doesn't answer within
+about 5 seconds, the console prints `no ARP reply from the host` and the
+board gives up. Check the address on your computer and reset the board, or
+just run `python flash.py` again.
+
+### How flash.py picks the board
+
+You don't have to work out which `/dev/tty*` the board is, or worry about
+flashing something else by mistake. `flash.py` only opens ports whose USB
+chip matches the ones on this board (Espressif's USB debug port and the
+CP2102N UART bridge). Other ESP32 boards use those chips too, so it asks
+each one what chip it is, which resets that device for a moment, and it
+writes nothing unless the answer is ESP32-S31. With both cables plugged in
+it flashes through the UART port. If it finds more than one S31 board, it
+lists them and stops; run it again with `--mac` or `--port` to pick one.
+`python flash.py --list` shows which board it would use without building
+or flashing.
+
+### Console
+
+`flash.py` prints the board's UART port at the end. Run
+`idf.py -p <port> monitor` to watch the console. Once the board is
+streaming you'll see a line like this every second:
 
 ```
 @@STREAM 55.6 kpkt/s  20.00 MS/s  lost 0 (total 0) ...
 ```
 
-### About the addresses
-
-The board has no DHCP; its address is built into the firmware from
-`firmware/main/local_net.h`, which is gitignored, so your addresses never
-end up in the repository:
-
-```c
-#define S31_IP       "192.168.50.20"   /* the board */
-#define S31_NETMASK  "255.255.255.0"
-#define S31_GW       "192.168.50.1"    /* your computer: the stream goes here */
-```
-
-Don't let the name `S31_GW` fool you: it isn't a router. It's the address
-of the computer that receives the stream. To change addresses, edit the
-file, then build and flash again.
-
-When the board boots, it looks up your computer's MAC address and then
-starts streaming to UDP port 4991. If your computer doesn't answer within
-about 5 seconds, the console prints `no ARP reply from the host` and the
-board gives up. Check the address on your computer and reset the board.
-
 ### 8-bit, 40 MS/s build
 
 Change `STREAM_BITS` from 10 to 8 in
-[firmware/main/main.c](firmware/main/main.c), then build and flash again.
-If you edit `sdkconfig.defaults`, delete `sdkconfig` first so the change
-takes effect.
+[firmware/main/main.c](firmware/main/main.c) and run `python flash.py`
+again. If you edit `sdkconfig.defaults`, delete `sdkconfig` first so the
+change takes effect.
 
 ## Receive
 
@@ -191,7 +207,7 @@ do that. Run them with your normal Python, not the one ESP-IDF sets up.
 
 ## What's where
 
-- `firmware/` - the ESP-IDF application.
+- `firmware/` - the ESP-IDF application and `flash.py`.
 - `host/` - Python tools for checking the stream.
 - `tests/` - a host-side unit test for the DMA ring logic.
 - `docs/` - the stream and control interface.

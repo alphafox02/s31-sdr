@@ -1,8 +1,9 @@
 /* Copyright 2026 CEMAXECUTER LLC
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copy to local_net.h (gitignored) and set the board's address and the
- * host's. S31_GW is the host that receives the stream, not a router.
+ * flash.py --board-ip/--host-ip writes local_net.h (gitignored) for you;
+ * or copy this file to local_net.h and edit it. S31_GW is the host that
+ * receives the stream, not a router.
  */
 #pragma once
 #define S31_IP       "192.168.50.20"
