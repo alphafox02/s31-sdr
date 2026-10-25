@@ -37,6 +37,10 @@ on the host side. You can change the frequency, gain (or AGC) and the
 own, or through a simple text port.
 [docs/vita49.md](docs/vita49.md) covers both.
 
+Plug an RTL-SDR into the board's USB-A port and it streams that too, as a
+second VITA-49 stream over the same cable; see
+[Add an RTL-SDR](#add-an-rtl-sdr).
+
 ## What you need
 
 - An ESP32-S31 Function CoreBoard.
@@ -177,6 +181,45 @@ If you want to measure the stream directly (rate, gaps, dropped packets,
 spectrum orientation, or a long logged run), the scripts in [host/](host/)
 do that. Run them with your normal Python, not the one ESP-IDF sets up.
 
+## Add an RTL-SDR
+
+Plug an RTL-SDR dongle straight into the board's USB-A port (5 V, up to
+500 mA; USB hubs aren't supported) and the board streams it on UDP port
+4993 alongside the ESP32-S31's own stream:
+
+| Stream | Port | Coverage | Samples |
+| --- | --- | --- | --- |
+| ESP32-S31 | 4991 | 2150-2850 MHz, 20 or 40 MHz wide | 10-bit at 20 MS/s, or 8-bit at 40 MS/s |
+| RTL-SDR | 4993 | 24-1766 MHz, up to 3.2 MHz wide | 8-bit at 2.4 MS/s (0.9-3.2 MS/s, or 225-300 kS/s) |
+
+Both run at full rate together, at either S31 rate. In gqrx, open a second
+window for the dongle with this device string:
+
+```
+driver=vita49,port=4993,gain_range=0:52.5:0.5
+```
+
+SoapyVITA49 remembers the streams it has found, so if the RTL stream
+doesn't show up in an application's device list, run `vita49-scan` once
+with the board streaming, or type the device string above.
+
+Frequency, sample rate and gain (0-52.5 dB, or the tuner's AGC) go to the
+dongle over VITA 49.2. The tuner's gain moves in steps, so the dongle uses
+the step at or below the gain you ask for and reports it. A frequency outside 24-1766 MHz or a rate
+outside 0.9-3.2 MS/s (or 225-300 kS/s) is refused and leaves that setting
+as it was. The text port takes the same settings: `rtl f <Hz>`,
+`rtl gain <dB>` or `rtl gain auto`, `rtl rate <S/s>` and `rtl status`.
+
+You can unplug and replug the dongle at any time; the S31 stream carries
+on. Dongles with an RTL2832U and an R820T or R820T2 tuner work, such as the
+RTL-SDR Blog V3 and the Nooelec NESDR SMArt. The R828D tuner in the
+RTL-SDR Blog V4 isn't supported yet.
+
+A streaming dongle takes about 18 KB of the board's internal RAM; its
+sample buffers are in PSRAM. To build without RTL-SDR support, turn off
+"Stream an RTL-SDR plugged into the USB-A port" under `s31-sdr` in
+`idf.py menuconfig`.
+
 ## Read before use
 
 - **Receive only.** The firmware starts the ESP32-S31's Wi-Fi radio so it
@@ -207,7 +250,8 @@ do that. Run them with your normal Python, not the one ESP-IDF sets up.
 
 ## What's where
 
-- `firmware/` - the ESP-IDF application and `flash.py`.
+- `firmware/` - the ESP-IDF application and `flash.py`; `rtl_drv.c` is
+  the RTL-SDR driver.
 - `host/` - Python tools for checking the stream.
 - `tests/` - a host-side unit test for the DMA ring logic.
 - `docs/` - the stream and control interface.

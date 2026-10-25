@@ -8,6 +8,7 @@ Everything is UDP on the direct Ethernet link:
 | 4991 | board -> host | VRT data and context packets |
 | 4991 | host <-> board | VITA 49.2 command / acknowledgement packets |
 | 4990 | host <-> board | plain-text control |
+| 4993 | board -> host, host <-> board | an RTL-SDR's VRT stream and its VITA 49.2 control, when one is plugged in |
 
 At boot the board also sends a few 3-byte datagrams to the host's port
 4992. They exist only to make the host answer ARP, so the board learns its
@@ -15,6 +16,16 @@ MAC address, and can be ignored.
 
 Field encodings follow SoapyVITA49 (VRT.cpp, Control.cpp), so the stream is
 discovered and decoded with no settings.
+
+The RTL-SDR stream works the same way, on port 4993 with stream ID
+`0x53310002`: CI8 data, 512 samples per packet, and context packets with
+bandwidth (equal to the sample rate), RF reference, gain in dB (-1 = AGC),
+sample rate, State/Event and data format. Its VITA 49.2 controllee takes
+RF reference (24-1766 MHz), sample rate (225-300 kS/s or 0.9-3.2 MS/s),
+gain (0-52.5 dB, set to the tuner step at or below it and acknowledged as
+partial when that differs) and the State/Event AGC bit. Each field of a
+command is applied on its own, so one refused field doesn't undo the
+others. The rest of this page describes the S31 stream.
 
 ## Data packets
 
@@ -85,6 +96,10 @@ Send one command per datagram; the board replies with one line.
 | `gain auto` | AGC on |
 | `agc` | gain index range over a short capture |
 | `status` | LO, PLL lock, gain, and radio monitor counters |
+| `rtl f <Hz>` | tune the RTL-SDR, 24-1766 MHz |
+| `rtl gain <dB>`, `rtl gain auto` | RTL-SDR tuner gain, 0-52.5 dB (the step at or below), or AGC |
+| `rtl rate <S/s>` | RTL-SDR sample rate |
+| `rtl status` | RTL-SDR frequency, rate and gain |
 
 Anything else replies `err`. The firmware also has low-level debugging
 commands (raw register access, capture test hooks). They have no

@@ -13,8 +13,11 @@ not ESP-IDF's. The first two need numpy, and `--png` also needs matplotlib.
   build.
 - `s31_soak.py --board <ip> --log <file> [--hours 12]` - one line a minute
   for long runs: packets, gaps, drops and the board's `status`.
-- `s31_status.py --board <ip>` - what the board is set to right now
-  (rate, format, filter, frequency, and gain as the 0-127 gain index or AGC),
-  asked over VITA 49.2, so it works while gqrx is running.
+- `s31_status.py --board <ip> [--port 4993]` - what the board is set to
+  right now (rate, format, filter, frequency, gain), asked over VITA 49.2,
+  so it works while gqrx is running. Gain is the 0-127 gain index for the
+  S31, or dB for the RTL-SDR (`--port 4993`).
 
-Each tool listens on UDP 4991, so close any SoapySDR application first.
+`s31_vrt_check.py`, `s31_stream_sign.py` and `s31_soak.py` listen on UDP
+4991 (or the `--port` you give the first two), so close any SoapySDR
+application using that stream first.

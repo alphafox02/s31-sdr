@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Check the ESP32-S31 VITA-49 stream: rate, continuity, context, spectrum.
 
-Listens on a UDP port (default 4991) for the firmware's VRT packets:
+Listens on a UDP port (default 4991, or 4993 for an RTL-SDR) for the
+firmware's VRT packets:
   data    type 1, stream ID, TSF sample count, CI8 or CI16 payload
   context type 4, CIF0 = bandwidth, RF reference, sample rate, data format
 Reports packet and sample rates, 4-bit packet-counter breaks, sample-count
@@ -79,6 +80,7 @@ def main():
 
     drops0 = udp_drops()
     n_data = n_ctx = cnt_breaks = ts_gaps = n_early = 0
+    total_pairs = 0
     last_cnt = last_ts = None
     ctx = None
     keep = []                     # up to ~1 s of samples for the spectrum
@@ -110,6 +112,7 @@ def main():
             n_early += 1
             continue
         npairs = (n - 16) // (2 * (ctx['item_bits'] // 8))
+        total_pairs += npairs
         if last_ts is not None and ts != last_ts + npairs:
             ts_gaps += 1
         last_cnt, last_ts = cnt, ts
@@ -118,9 +121,11 @@ def main():
     dt = time.time() - t0
     drops = udp_drops() - drops0
 
-    pairs_per_pkt = 1440 // (2 * ((ctx or {}).get('item_bits', 8) // 8))
+    # packets before the first context are counted at the average size of the rest
+    counted = n_data - n_early
+    pairs = total_pairs + (n_early * total_pairs / counted if counted else 0)
     print(f'{n_data} data + {n_ctx} context packets in {dt:.1f} s: '
-          f'{n_data / dt / 1e3:.1f} kpkt/s = {n_data * pairs_per_pkt / dt / 1e6:.2f} MS/s received')
+          f'{n_data / dt / 1e3:.1f} kpkt/s = {pairs / dt / 1e6:.2f} MS/s received')
     print(f'packet-counter breaks: {cnt_breaks}   sample-count gaps: {ts_gaps} '
           f'(checked after the first context; {n_early} packets before it)   '
           f'kernel UDP receive drops: {drops}')
