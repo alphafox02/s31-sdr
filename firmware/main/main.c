@@ -18,6 +18,9 @@
 #include "esp_task_wdt.h"
 #include "net.h"
 #include "stream.h"
+#if CONFIG_S31SDR_RTL_SDR
+#include "usb_rtl.h"
+#endif
 
 extern void rftest_open_clk(void);
 
@@ -52,6 +55,9 @@ static void stream_task(void *arg)
     s31_net_start();
     while (!s31_net_link_up()) vTaskDelay(pdMS_TO_TICKS(100));
     s31_stream_main(START_CHANNEL, STREAM_BITS);
+#if CONFIG_S31SDR_RTL_SDR
+    s31_usb_start();
+#endif
     vTaskDelete(NULL);
 }
 

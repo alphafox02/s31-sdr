@@ -45,3 +45,7 @@ CONFIG_ETH_TRANSMIT_MUTEX=y
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 # The -O2 image no longer fits the 1 MB single-app partition.
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# USB host transfer buffers in PSRAM (the S31's USB DMA can reach it):
+# internal RAM is kept for the capture rings.
+CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM=y

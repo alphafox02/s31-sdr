@@ -6,14 +6,14 @@ filter, LO and gain.
 
 Sends a VITA 49.2 query-state command and decodes the reply. The reply
 comes back to this script's own port, so it works while gqrx or another
-SoapySDR application holds UDP 4991.
+SoapySDR application holds the stream's port.
 """
 import argparse
 import socket
 import struct
 import sys
 
-STREAM_ID = 0x53310001
+STREAM_IDS = {4991: 0x53310001, 4993: 0x53310002}   # S31, RTL-SDR
 CIF0_BW, CIF0_RF, CIF0_GAIN = 1 << 29, 1 << 27, 1 << 23
 CIF0_RATE, CIF0_SE, CIF0_FMT = 1 << 21, 1 << 16, 1 << 15
 CAM_REQ_QUERY = 1 << 18
@@ -23,7 +23,7 @@ def query(board, port):
     # one placeholder per requested field: bandwidth, RF, gain, rate,
     # State/Event, data format (two words)
     fields = struct.pack('>qqIqIII', 0, 0, 0, 0, 0, 0, 0)
-    body = struct.pack('>IIII', STREAM_ID, CAM_REQ_QUERY, 1,
+    body = struct.pack('>IIII', STREAM_IDS.get(port, STREAM_IDS[4991]), CAM_REQ_QUERY, 1,
                        CIF0_BW | CIF0_RF | CIF0_GAIN | CIF0_RATE | CIF0_SE | CIF0_FMT) + fields
     packet = struct.pack('>I', (6 << 28) | (1 + len(body) // 4)) + body
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

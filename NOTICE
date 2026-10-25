@@ -8,3 +8,12 @@ from analysis of the RF test library (librftest.a) that ships with ESP-IDF.
 At build time it links ESP-IDF (Apache-2.0) and Espressif's precompiled PHY,
 Wi-Fi and RF test libraries, which are distributed by Espressif under their
 own license terms and are not part of this repository.
+
+The RTL-SDR driver (firmware/main/rtl_drv.c) is a C port of code from
+webrtlsdr (https://github.com/jtarrio/webrtlsdr):
+  Copyright 2013 Google Inc.
+  Copyright 2024 Jacobo Tarrio Barreiro
+licensed under the Apache License, Version 2.0.
+
+The USB host stack is Espressif's espressif/usb component (Apache-2.0),
+downloaded by the ESP-IDF component manager at build time.

@@ -1,0 +1,16 @@
+# Copyright 2026 CEMAXECUTER LLC
+# SPDX-License-Identifier: Apache-2.0
+
+menu "s31-sdr"
+
+    config S31SDR_RTL_SDR
+        bool "Stream an RTL-SDR plugged into the USB-A port"
+        default y
+        help
+            Run USB host on the board's USB-A port. An RTL-SDR dongle
+            (RTL2832U with an R820T or R820T2 tuner) plugged in there is
+            streamed as a second VITA-49 stream on UDP port 4993. Without
+            a dongle this costs only the idle USB host tasks; turn it off to
+            leave the USB host code out of the firmware.
+
+endmenu

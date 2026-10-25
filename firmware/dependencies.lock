@@ -138,6 +138,23 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.4.1
+  espressif/usb:
+    component_hash: 99eee72ea224d9117d4c342442717a1f20bf8112e2ab5d7d7038b827874f4c92
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.5.3'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32s2
+    - esp32s3
+    - esp32s31
+    - esp32p4
+    - esp32h4
+    - linux
+    version: 1.6.0
   espressif/yt8531:
     component_hash: a2e016544df0567a98c87537abb5ec164e07d4de41a679067ba0f39eadffe903
     dependencies:
@@ -154,6 +171,7 @@ dependencies:
     version: 6.2.0
 direct_dependencies:
 - espressif/ethernet_init
-manifest_hash: 1816f7d6959bec15421a3bf34d71ab1bb5c9aa4f91fc0b2d5b87d8dc852e126d
+- espressif/usb
+manifest_hash: ea3e655c68afbb69108102dad2bf32446c7598d0485d0a914c2caef203156fc1
 target: esp32s31
 version: 3.0.0

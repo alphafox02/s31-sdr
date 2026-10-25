@@ -59,6 +59,9 @@
 #include "local_net.h"
 #include "stream.h"
 #include "vrt.h"
+#if CONFIG_S31SDR_RTL_SDR
+#include "usb_rtl.h"
+#endif
 
 extern void adctrig(int count, int mode, int a2, int a3, int a4,
                     int a5, int a6, int a7, int s9, int s10);
@@ -271,8 +274,9 @@ static uint16_t ip_csum(const uint8_t *h)
     return (uint16_t)~sum;
 }
 
-/* Ethernet + IPv4 + UDP header for a frame carrying `vrt_len` bytes of VRT. */
-static void frame_header(uint8_t *f, const uint8_t dst_mac[6], const uint8_t src_mac[6], int vrt_len)
+/* Ethernet + IPv4 + UDP header for a frame carrying `vrt_len` bytes of VRT
+ * from and to UDP `port`. */
+static void frame_header(uint8_t *f, const uint8_t dst_mac[6], const uint8_t src_mac[6], int vrt_len, uint16_t port)
 {
     memcpy(f, dst_mac, 6); memcpy(f + 6, src_mac, 6);
     f[12] = 0x08; f[13] = 0x00;
@@ -283,7 +287,7 @@ static void frame_header(uint8_t *f, const uint8_t dst_mac[6], const uint8_t src
     ip[0] = 0x45; ip[2] = iplen >> 8; ip[3] = iplen & 0xFF; ip[6] = 0x40; ip[8] = 64; ip[9] = 17;
     memcpy(ip + 12, &src, 4); memcpy(ip + 16, &dst, 4);
     uint16_t c = ip_csum(ip); ip[10] = c >> 8; ip[11] = c & 0xFF;
-    udp[0] = VRT_PORT >> 8; udp[1] = VRT_PORT & 0xFF; udp[2] = VRT_PORT >> 8; udp[3] = VRT_PORT & 0xFF;
+    udp[0] = port >> 8; udp[1] = port & 0xFF; udp[2] = port >> 8; udp[3] = port & 0xFF;
     udp[4] = (8 + vrt_len) >> 8; udp[5] = (8 + vrt_len) & 0xFF; udp[6] = udp[7] = 0;
 }
 
@@ -462,6 +466,7 @@ static int tune_hz(double f, double *actual)
  *   bw <20|40>      receive filter width
  *   status          LO, lock, gain, monitor counters
  *   agc             gain index range over one 511-sample dump shot
+ *   rtl ...         the RTL-SDR, if one is plugged in (usb_rtl.c)
  * Anything else replies "err". Built with S31_DEBUG_CMDS 1, also:
  *   rd <blk> <reg>  read an analog (regi2c) register, hex
  *   wr <blk> <reg> <val>  write one (can detune the receiver)
@@ -558,6 +563,10 @@ static void control_task(void *arg)
                 if (++hist[g] > hist[mode]) mode = g;
             }
             snprintf(reply, sizeof(reply), "gain %d-%d, mostly %d (%d/%d)", lo, hi, mode, hist[mode], DUMP_N);
+#if CONFIG_S31SDR_RTL_SDR
+        } else if (strncmp(buf, "rtl ", 4) == 0) {
+            if (!s31_rtl_command(buf + 4, reply, sizeof(reply))) snprintf(reply, sizeof(reply), "err");
+#endif
         } else if (sscanf(buf, "ch %d", &ch) == 1 && ch >= 1 && ch <= 13) {
             /* exact tune to the channel centre: in 40 MHz mode the PHY's own
              * LO would sit 10 MHz off, at the 40 MHz channel's centre */
@@ -774,6 +783,65 @@ static bool learn_host_mac(uint8_t mac[6])
     return false;
 }
 
+/* Packets of other streams (the RTL-SDR's) are queued here and sent by the
+ * sender task between its own: a single transmitter, so no other core
+ * spins on the Ethernet driver while this one keeps it busy. The driver
+ * copies each frame, so the slots live in PSRAM, allocated when a second
+ * stream first needs them. One producer (s31_vrt_claim, s31_vrt_commit)
+ * and one consumer (the sender). */
+#define TXQ_N     256
+#define TXQ_SLOT  (42 + 1088)                       /* Ethernet/IP/UDP headers + one VRT packet */
+static uint8_t *txq;
+static uint16_t txq_len[TXQ_N], txq_port[TXQ_N];
+static uint32_t txq_head, txq_tail;
+static uint32_t txq_drops;                         /* counted by both sides */
+
+uint8_t *s31_vrt_claim(void)
+{
+    if (!txq) {
+        uint8_t *q = heap_caps_malloc(TXQ_N * TXQ_SLOT, MALLOC_CAP_SPIRAM);
+        if (!q) { __atomic_fetch_add(&txq_drops, 1, __ATOMIC_RELAXED); return NULL; }
+        __atomic_store_n(&txq, q, __ATOMIC_RELEASE);
+    }
+    if (txq_head - __atomic_load_n(&txq_tail, __ATOMIC_ACQUIRE) >= TXQ_N) {
+        __atomic_fetch_add(&txq_drops, 1, __ATOMIC_RELAXED);
+        return NULL;
+    }
+    return txq + (txq_head % TXQ_N) * TXQ_SLOT + 42;
+}
+
+void s31_vrt_commit(uint16_t port, int vrt_len)
+{
+    uint32_t k = txq_head % TXQ_N;
+    txq_len[k] = vrt_len;
+    txq_port[k] = port;
+    __atomic_store_n(&txq_head, txq_head + 1, __ATOMIC_RELEASE);
+}
+
+uint32_t s31_vrt_queue_drops(void) { return __atomic_load_n(&txq_drops, __ATOMIC_RELAXED); }
+
+/* Send up to `max` queued packets (sender task only); a packet the driver
+ * keeps refusing is dropped and counted. The sender passes here about
+ * 9,800 times a second in the 10-bit mode, so one packet per pass carries
+ * even an RTL-SDR's top rate (3.2 MS/s, 6,250 packets a second), while a
+ * burst (the other stream catching up after something held core 0) cannot
+ * keep the sender from its own rings; the queue absorbs it. */
+static void drain_txq(const uint8_t host_mac[6], const uint8_t my_mac[6], int max)
+{
+    uint8_t *q = __atomic_load_n(&txq, __ATOMIC_ACQUIRE);
+    if (!q) return;
+    uint32_t h = __atomic_load_n(&txq_head, __ATOMIC_ACQUIRE), t = txq_tail;
+    for (; t != h && max-- > 0; t++) {
+        uint32_t k = t % TXQ_N;
+        uint8_t *f = q + k * TXQ_SLOT;
+        frame_header(f, host_mac, my_mac, txq_len[k], txq_port[k]);
+        int tries = 0;
+        while (esp_eth_transmit(eth, f, 42 + txq_len[k]) != ESP_OK && ++tries < 20000) {}
+        if (tries >= 20000) __atomic_fetch_add(&txq_drops, 1, __ATOMIC_RELAXED);
+        __atomic_store_n(&txq_tail, t + 1, __ATOMIC_RELEASE);
+    }
+}
+
 struct stats {
     uint64_t sent, lost, lost_total, retries, tx_fail, ctx_fail, cyc_pack, cyc_tx;
     int64_t max_gap, max_lag;
@@ -793,7 +861,7 @@ static void sender_task(void *arg)
     esp_eth_ioctl(eth, ETH_CMD_G_MAC_ADDR, my_mac);
     if (!learn_host_mac(host_mac)) { printf("stream: no ARP reply from the host\n"); vTaskDelete(NULL); }
     printf("stream: host MAC learned, sending VRT to port %d\n", VRT_PORT);
-    frame_header(frame, host_mac, my_mac, VRT_HDR + PAYLOAD);
+    frame_header(frame, host_mac, my_mac, VRT_HDR + PAYLOAD, VRT_PORT);
 
     uint64_t rd = written_now(), sample = 0, lost = 0, sent = 0, retries = 0, tx_fail = 0, ctx_fail = 0;
     int64_t n = 0;                          /* 10-bit: next PARLIO sample index */
@@ -815,13 +883,14 @@ static void sender_task(void *arg)
     int64_t prev = esp_timer_get_time(), max_gap = 0, max_lag = 0; int skips = 0;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
+        drain_txq(host_mac, my_mac, 1);
         int64_t now = esp_timer_get_time();
         if (now - prev > max_gap) max_gap = now - prev;
         prev = now;
         if (now >= next_ctx || ctx_now) {
             ctx_now = 0;
             int clen = build_context(cframe + 42, ccount++, sample);
-            frame_header(cframe, host_mac, my_mac, clen);
+            frame_header(cframe, host_mac, my_mac, clen, VRT_PORT);
             /* esp_eth_transmit fails while every transmit descriptor is in
              * use; retry until one frees (here and for data frames) */
             int ct = 0;
