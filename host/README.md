@@ -13,5 +13,8 @@ not ESP-IDF's. The first two need numpy, and `--png` also needs matplotlib.
   build.
 - `s31_soak.py --board <ip> --log <file> [--hours 12]` - one line a minute
   for long runs: packets, gaps, drops and the board's `status`.
+- `s31_status.py --board <ip>` - what the board is set to right now
+  (rate, format, filter, frequency, and gain as the 0-127 gain index or AGC),
+  asked over VITA 49.2, so it works while gqrx is running.
 
 Each tool listens on UDP 4991, so close any SoapySDR application first.
