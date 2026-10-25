@@ -41,6 +41,10 @@ Plug an RTL-SDR into the board's USB-A port and it streams that too, as a
 second VITA-49 stream over the same cable; see
 [Add an RTL-SDR](#add-an-rtl-sdr).
 
+The same board can also run a second firmware: a standalone FM radio that
+plays an RTL-SDR on the board's speaker or on your phone, with voice
+commands; see [FM radio](#fm-radio).
+
 ## What you need
 
 - An ESP32-S31 Function CoreBoard.
@@ -205,9 +209,9 @@ with the board streaming, or type the device string above.
 
 Frequency, sample rate and gain (0-52.5 dB, or the tuner's AGC) go to the
 dongle over VITA 49.2. The tuner's gain moves in steps, so the dongle uses
-the step at or below the gain you ask for and reports it. A frequency outside 24-1766 MHz or a rate
-outside 0.9-3.2 MS/s (or 225-300 kS/s) is refused and leaves that setting
-as it was. The text port takes the same settings: `rtl f <Hz>`,
+the step at or below the gain you ask for and reports it. A frequency
+outside 24-1766 MHz or a rate outside 0.9-3.2 MS/s (or 225-300 kS/s) is
+refused and leaves that setting as it was. The text port takes the same settings: `rtl f <Hz>`,
 `rtl gain <dB>` or `rtl gain auto`, `rtl rate <S/s>` and `rtl status`.
 
 You can unplug and replug the dongle at any time; the S31 stream carries
@@ -220,12 +224,68 @@ sample buffers are in PSRAM. To build without RTL-SDR support, turn off
 "Stream an RTL-SDR plugged into the USB-A port" under `s31-sdr` in
 `idf.py menuconfig`.
 
+## FM radio
+
+The radio is a separate firmware for the same board. It plays FM broadcast
+from an RTL-SDR on the board's speaker output, runs a Wi-Fi hotspot with a
+page for your phone, and listens for voice commands. It doesn't use the
+ESP32-S31's own receiver or the VITA-49 streams. To flash it:
+
+```sh
+cd s31-sdr/firmware
+python flash.py --radio
+```
+
+The first flash takes a few minutes, because it also writes the speech
+models (about 3 MB). `python flash.py` puts the streamer back.
+
+On top of the board you need one of the RTL-SDR dongles above, with an FM
+antenna, and, to hear it from the board itself, a small 4-8 ohm speaker on
+the board's SPK connector. The amplifier drives both speaker wires, so
+connect the speaker across the two and nothing to ground. For headphones or
+powered speakers, use the phone page instead.
+
+The radio starts playing when the dongle is plugged in, on the last station
+it played (99.5 MHz the first time), and remembers the station and volume.
+There are four ways to work it:
+
+- **The BOOT button.** A short press seeks to the next station up, a long
+  one (over half a second) down. The first seek scans the band, which takes
+  a couple of seconds.
+- **Your phone.** Join the Wi-Fi hotspot `s31-radio` (password `s31radio`)
+  and open http://192.168.4.1. The page tunes, seeks, scans and sets the
+  speaker's volume, and **Listen on this phone** plays the radio in the
+  phone's browser. On an iPhone, turn the silent switch off. Change the
+  hotspot's name and password, or turn it off, in menuconfig (the command
+  is in `firmware/sdkconfig.radio`); please change the password.
+- **Your voice.** Say "Hi ESP", wait for the rising chime, then say a
+  command within five seconds: "next station" or "previous station",
+  "volume up" or "volume down", "mute" or "unmute", "scan", or a frequency
+  such as "ninety nine point five" or "one oh one point one". One note
+  means done; a falling chime means it didn't catch the command. The radio
+  dips while it listens. Voice control is new and hasn't been tested with
+  real speech yet, so expect to adjust it.
+- **Ethernet.** The text port on UDP 4990 takes `f <MHz>`, `seek up`,
+  `seek down`, `scan`, `vol <0-100>`, `on`, `off` (mute), `status` and the
+  `rtl` commands above, and `listen` sends the audio to your computer:
+
+  ```sh
+  echo "f 101.1" | nc -u -w1 <board-ip> 4990
+  echo listen | nc -u -w1 <board-ip> 4990
+  nc -lu 4994 | aplay -f S16_LE -r 48000 -c 1
+  ```
+
+The radio is mono. Scan, seek and spoken frequencies use the US channel
+grid (88.1-107.9 MHz, odd tenths), though `f` tunes anywhere from 76 to
+108 MHz. Voice commands are in English, using Espressif's ESP-SR, which
+the build downloads.
+
 ## Read before use
 
-- **Receive only.** The firmware starts the ESP32-S31's Wi-Fi radio so it
-  can receive, but it never joins a network or scans. Even so, don't cable
-  the antenna port straight into sensitive test equipment without an
-  attenuator.
+- **The streamer is receive only.** It starts the ESP32-S31's Wi-Fi radio
+  so it can receive, but it never joins a network or scans. Even so, don't
+  cable the antenna port straight into sensitive test equipment without an
+  attenuator. The FM radio firmware does transmit: its Wi-Fi hotspot.
 - **Leave the listed header pins free** while it runs (see
   [What you need](#what-you-need)). The firmware drives them.
 - **It depends on ESP-IDF master.** Capture goes through Espressif's RF test
@@ -251,7 +311,7 @@ sample buffers are in PSRAM. To build without RTL-SDR support, turn off
 ## What's where
 
 - `firmware/` - the ESP-IDF application and `flash.py`; `rtl_drv.c` is
-  the RTL-SDR driver.
+  the RTL-SDR driver, and `radio.c` the FM radio.
 - `host/` - Python tools for checking the stream.
 - `tests/` - a host-side unit test for the DMA ring logic.
 - `docs/` - the stream and control interface.

@@ -17,3 +17,8 @@ licensed under the Apache License, Version 2.0.
 
 The USB host stack is Espressif's espressif/usb component (Apache-2.0),
 downloaded by the ESP-IDF component manager at build time.
+
+The FM radio build also uses, downloaded the same way: espressif/esp_codec_dev
+(Apache-2.0) for the audio codec, and espressif/esp-sr with its models for
+voice commands, under the ESPRESSIF MIT License, which permits use on
+Espressif products such as the ESP32-S31.
