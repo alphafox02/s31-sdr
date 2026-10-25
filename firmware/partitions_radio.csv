@@ -1,0 +1,9 @@
+# Copyright 2026 CEMAXECUTER LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# The FM radio build: the app, and ESP-SR's speech models in "model".
+# Name,   Type, SubType, Offset,  Size
+nvs,      data, nvs,     0x9000,  0x6000,
+phy_init, data, phy,     0xf000,  0x1000,
+factory,  app,  factory, 0x10000, 3M,
+model,    data, spiffs,  ,        6M,

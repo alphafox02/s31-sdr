@@ -1,7 +1,8 @@
 /* Copyright 2026 CEMAXECUTER LLC
  * SPDX-License-Identifier: Apache-2.0
  *
- * s31-sdr: stream the receiver's I/Q as VITA-49 over Gigabit Ethernet.
+ * s31-sdr: stream the receiver's I/Q as VITA-49 over Gigabit Ethernet (or,
+ * with CONFIG_S31SDR_FM_RADIO, play FM radio from an RTL-SDR on the speaker).
  *
  * The RF test library's capture path needs the PHY receiving normally: Wi-Fi
  * STA up, promiscuous, fixed channel, no power save. rftest_open_clk() turns
@@ -21,6 +22,15 @@
 #if CONFIG_S31SDR_RTL_SDR
 #include "usb_rtl.h"
 #endif
+#if CONFIG_S31SDR_FM_RADIO
+#include "radio.h"
+#endif
+#if CONFIG_S31SDR_RADIO_WIFI
+#include "web.h"
+#endif
+#if CONFIG_S31SDR_RADIO_VOICE
+#include "voice.h"
+#endif
 
 extern void rftest_open_clk(void);
 
@@ -32,6 +42,29 @@ int cmd_parse(int argc, char **argv) { (void)argc; (void)argv; return 0; }
 #define STREAM_BITS 10
 /* Start-up channel (2437 MHz); retune over VITA 49.2 or the text port. */
 #define START_CHANNEL 6
+
+#if CONFIG_S31SDR_FM_RADIO
+
+/* The radio needs no S31 receiver, so Wi-Fi is free for its hotspot.
+ * Ethernet is only for the text commands, so it starts without waiting
+ * for a link. */
+void app_main(void)
+{
+    ESP_ERROR_CHECK(nvs_flash_init());
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    s31_net_start();
+    s31_radio_start();
+#if CONFIG_S31SDR_RADIO_VOICE
+    s31_voice_start();
+#endif
+#if CONFIG_S31SDR_RADIO_WIFI
+    s31_web_start();
+#endif
+    s31_usb_start();
+}
+
+#else
 
 static void bring_up_phy(void)
 {
@@ -69,3 +102,5 @@ void app_main(void)
     xTaskCreatePinnedToCore(stream_task, "stream", 8192, NULL, 10, NULL, 1);
     for (;;) vTaskDelay(pdMS_TO_TICKS(10000));
 }
+
+#endif

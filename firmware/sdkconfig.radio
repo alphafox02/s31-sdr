@@ -1,0 +1,15 @@
+# Copyright 2026 CEMAXECUTER LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# The FM radio build, on top of sdkconfig.defaults: `python flash.py --radio`
+# builds it in build-radio/. To change its options (hotspot name and
+# password, voice), run
+#   idf.py -B build-radio -D SDKCONFIG=build-radio/sdkconfig menuconfig
+CONFIG_S31SDR_FM_RADIO=y
+# sockets for the web page (several per phone) next to the radio's own
+CONFIG_LWIP_MAX_SOCKETS=16
+# voice commands: the app and the speech models
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_radio.csv"
+CONFIG_SR_WN_WN9_HIESP=y
+CONFIG_SR_MN_EN_MULTINET7_QUANT=y

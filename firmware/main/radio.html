@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>S31 Radio</title>
+<style>
+  :root { --bg: #101418; --panel: #1b2128; --line: #2c343d; --text: #e8edf2; --dim: #8b96a3; --accent: #4fb3a9; --warn: #d9a441; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 system-ui, -apple-system, sans-serif; }
+  main { max-width: 440px; margin: 0 auto; padding: 20px 16px 32px; }
+  h1 { font-size: 15px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin: 0 0 18px; }
+  .dial { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px 16px 18px; text-align: center; }
+  .freq { font-size: 64px; font-weight: 300; font-variant-numeric: tabular-nums; line-height: 1; cursor: pointer; }
+  .freq small { font-size: 18px; color: var(--dim); margin-left: 6px; }
+  .state { margin-top: 10px; color: var(--dim); font-size: 14px; }
+  .state.off { color: var(--warn); }
+  .row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 16px; }
+  button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 0; cursor: pointer; }
+  button:active { background: var(--line); }
+  button.wide { width: 100%; margin-top: 12px; padding: 14px 0; font-weight: 600; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #0b1714; }
+  h2 { font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); margin: 26px 0 10px; display: flex; justify-content: space-between; align-items: center; }
+  h2 button { padding: 4px 12px; font-size: 13px; text-transform: none; letter-spacing: 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chips button { padding: 8px 12px; font-variant-numeric: tabular-nums; }
+  .chips button.here { border-color: var(--accent); color: var(--accent); }
+  .empty { color: var(--dim); font-size: 14px; }
+  .vol { display: flex; align-items: center; gap: 12px; }
+  .vol input { flex: 1; accent-color: var(--accent); }
+  .vol span { width: 32px; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .note { color: var(--dim); font-size: 13px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>S31 Radio</h1>
+
+  <div class="dial">
+    <div class="freq" id="freq" title="Tap to enter a frequency">--.-<small>MHz</small></div>
+    <div class="state" id="state">connecting...</div>
+    <div class="row">
+      <button onclick="send('seek down')" aria-label="Seek down">&#9664;&#9664;</button>
+      <button onclick="step(-0.1)" aria-label="Down 0.1 MHz">&minus;0.1</button>
+      <button onclick="step(0.1)" aria-label="Up 0.1 MHz">+0.1</button>
+      <button onclick="send('seek up')" aria-label="Seek up">&#9654;&#9654;</button>
+    </div>
+    <button class="wide" id="listen" onclick="listen()">Listen on this phone</button>
+    <div class="note" id="listenNote">Plays the radio here. On an iPhone, turn the silent switch off.</div>
+  </div>
+
+  <h2>Stations <button onclick="scan(this)">Scan</button></h2>
+  <div class="chips" id="stations"><span class="empty">Tap Scan to find stations.</span></div>
+
+  <h2>Board speaker</h2>
+  <div class="vol">
+    <input type="range" id="vol" min="0" max="100" step="5" oninput="volLabel.textContent = this.value" onchange="send('vol ' + this.value)">
+    <span id="volLabel">--</span>
+  </div>
+  <button class="wide" id="mute" onclick="send(muted ? 'on' : 'off')">Mute speaker</button>
+</main>
+
+<script>
+let mhz = 0, muted = false, sliding = false;
+const $ = id => document.getElementById(id);
+
+async function send(c) {
+  try { await fetch('/cmd?c=' + encodeURIComponent(c)); } catch (e) {}
+  refresh();
+}
+
+function step(d) { if (mhz) send('f ' + (Math.round((mhz + d) * 10) / 10).toFixed(1)); }
+
+async function scan(b) {
+  b.disabled = true; b.textContent = 'Scanning...';
+  await send('scan');
+  b.disabled = false; b.textContent = 'Scan';
+}
+
+$('freq').onclick = () => {
+  const v = prompt('Frequency in MHz', mhz ? mhz.toFixed(1) : '');
+  if (v && !isNaN(parseFloat(v))) send('f ' + parseFloat(v));
+};
+$('vol').onpointerdown = () => sliding = true;
+$('vol').onpointerup = () => sliding = false;
+
+async function refresh() {
+  let s;
+  try { s = await (await fetch('/status')).json(); } catch (e) { $('state').textContent = 'no connection'; return; }
+  mhz = s.mhz; muted = s.muted;
+  $('freq').firstChild.nodeValue = s.mhz.toFixed(1);
+  const st = $('state');
+  st.textContent = !s.live ? 'plug in the RTL-SDR' : s.muted ? 'speaker muted' : 'playing';
+  st.className = 'state' + (s.live ? '' : ' off');
+  if (!sliding) { $('vol').value = s.vol; $('volLabel').textContent = s.vol; }
+  $('mute').textContent = s.muted ? 'Unmute speaker' : 'Mute speaker';
+  $('mute').className = 'wide' + (s.muted ? ' on' : '');
+  const box = $('stations');
+  if (s.stations.length) {
+    box.replaceChildren(...s.stations.map(f => {
+      const b = document.createElement('button');
+      b.textContent = f.toFixed(1);
+      if (Math.abs(f - s.mhz) < 0.05) b.className = 'here';
+      b.onclick = () => send('f ' + f.toFixed(1));
+      return b;
+    }));
+  }
+}
+
+/* Audio: 40 ms of 48 kHz 16-bit mono per message, queued back to back
+ * a little ahead of the clock; if the queue drifts too far either way,
+ * start again 120 ms ahead. */
+let ac = null, ws = null, at = 0;
+
+function listen() {
+  if (ws) { ws.close(); return; }
+  ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+  ac.resume();
+  ws = new WebSocket('ws://' + location.host + '/audio');
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => { $('listen').textContent = 'Stop listening'; $('listen').className = 'wide on'; };
+  ws.onmessage = e => {
+    const s = new Int16Array(e.data);
+    const b = ac.createBuffer(1, s.length, 48000), d = b.getChannelData(0);
+    for (let i = 0; i < s.length; i++) d[i] = s[i] / 32768;
+    const src = ac.createBufferSource();
+    src.buffer = b;
+    src.connect(ac.destination);
+    const now = ac.currentTime;
+    if (at < now + 0.02 || at > now + 0.5) at = now + 0.12;
+    src.start(at);
+    at += b.duration;
+  };
+  ws.onclose = () => { ws = null; $('listen').textContent = 'Listen on this phone'; $('listen').className = 'wide'; };
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

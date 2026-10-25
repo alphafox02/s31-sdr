@@ -2,5 +2,13 @@
 ## SPDX-License-Identifier: Apache-2.0
 dependencies:
   espressif/usb: "^1.6.0"
+  espressif/esp_codec_dev:
+    version: "~1.6.2"
+    rules:
+      - if: "$CONFIG{S31SDR_FM_RADIO} == True"
+  espressif/esp-sr:
+    version: "~2.6.0"
+    rules:
+      - if: "$CONFIG{S31SDR_RADIO_VOICE} == True"
   espressif/ethernet_init:
     version: "^1.3.0"

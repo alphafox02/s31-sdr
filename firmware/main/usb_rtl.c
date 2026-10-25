@@ -2,7 +2,8 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * An RTL-SDR dongle on the board's USB-A host port (5 V always on, limited
- * to 500 mA), streamed to the host as a second VITA-49 stream: stream ID
+ * to 500 mA), streamed to the host as a second VITA-49 stream (or, in the
+ * FM radio build, handed to radio.c instead): stream ID
  * RTL_SID on UDP port RTL_PORT, CI8, with context packets ten times a
  * second. Frequency, sample rate and gain are set over VITA 49.2 on the
  * same port, or with "rtl ..." text commands (s31_rtl_command).
@@ -32,6 +33,9 @@
 #include "stream.h"
 #include "usb_rtl.h"
 #include "vrt.h"
+#if CONFIG_S31SDR_FM_RADIO
+#include "radio.h"
+#endif
 
 #define RTL_RATE      2400000               /* at start-up */
 #define RTL_FREQ      100000000
@@ -68,9 +72,11 @@ static uint32_t n_stat;
 
 /* Stream state. Data and context packets are both built in the transfer
  * callback, the sender queue's only producer. */
+#if !CONFIG_S31SDR_FM_RADIO
 static uint64_t sample_count;
 static int64_t next_ctx;
 static uint32_t data_count, ctx_count;
+#endif
 static volatile bool ctx_now;                /* send a context packet at once */
 static volatile uint32_t cur_freq, cur_rate;
 static volatile float cur_gain = -1;         /* dB; negative = the tuner's AGC (a float: read in one word) */
@@ -78,7 +84,18 @@ static float manual_gain = 30;               /* restored when AGC is switched of
 static rtl_dev_t *rtl;                       /* set while a dongle is streaming */
 static SemaphoreHandle_t rtl_mutex;          /* one caller of the driver at a time */
 
-/* ---- packets ---- */
+/* The last settings asked for, under rtl_mutex: a dongle plugged in (again)
+ * starts with them, so a replug doesn't lose the tuning. */
+static uint32_t want_freq = RTL_FREQ, want_rate = RTL_RATE;
+static float want_gain = -1;
+
+/* ---- where the samples go ---- */
+
+#if CONFIG_S31SDR_FM_RADIO
+
+static void deliver(const uint8_t *iq, int len) { s31_radio_feed(iq, len); }
+
+#else
 
 /* One data packet from `len` bytes of samples (unsigned I, Q), sent as
  * signed CI8. If the queue is full the packet is dropped, but the sample
@@ -129,6 +146,23 @@ static void send_context(void)
     be32(p, (0x4u << 28) | (1u << 20) | ((ctx_count++ & 0xF) << 16) | (uint32_t)w);
     s31_vrt_commit(RTL_PORT, 4 * w);
 }
+
+/* Samples as data packets, with a context packet when one is due. */
+static void deliver(const uint8_t *iq, int len)
+{
+    int64_t now = esp_timer_get_time();
+    if (ctx_now || now >= next_ctx) {
+        ctx_now = false;
+        next_ctx = now + 100000;
+        send_context();
+    }
+    for (int k = 0; k < len; k += RTL_PAYLOAD) {
+        int n = len - k < RTL_PAYLOAD ? len - k : RTL_PAYLOAD;
+        send_data(iq + k, n & ~3);
+    }
+}
+
+#endif
 
 /* ---- USB ---- */
 
@@ -188,9 +222,8 @@ static usb_device_handle_t report(uint8_t addr)
     return NULL;
 }
 
-/* A bulk transfer finished: count it, queue its samples as packets (and a
- * context packet when one is due), and resubmit it unless the dongle is
- * gone. Statistics use every 16th sample pair. */
+/* A bulk transfer finished: count it, pass its samples on, and resubmit
+ * it unless the dongle is gone. Statistics use every 16th sample pair. */
 static void bulk_done(usb_transfer_t *t)
 {
     if (t->status == USB_TRANSFER_STATUS_COMPLETED) {
@@ -205,16 +238,7 @@ static void bulk_done(usb_transfer_t *t)
         rx_bytes += t->actual_num_bytes;
         sum_i += si; sum_q += sq; sum_pow += sp; n_stat += n;
         taskEXIT_CRITICAL(&stats_lock);
-        int64_t now = esp_timer_get_time();
-        if (ctx_now || now >= next_ctx) {
-            ctx_now = false;
-            next_ctx = now + 100000;
-            send_context();
-        }
-        for (int k = 0; k < t->actual_num_bytes; k += RTL_PAYLOAD) {
-            int len = t->actual_num_bytes - k < RTL_PAYLOAD ? t->actual_num_bytes - k : RTL_PAYLOAD;
-            send_data(t->data_buffer + k, len & ~3);
-        }
+        deliver(t->data_buffer, t->actual_num_bytes);
     } else if (t->status != USB_TRANSFER_STATUS_NO_DEVICE && t->status != USB_TRANSFER_STATUS_CANCELED) {
         taskENTER_CRITICAL(&stats_lock);
         rx_errors++;
@@ -225,7 +249,9 @@ static void bulk_done(usb_transfer_t *t)
         __atomic_fetch_sub(&bulk_live, 1, __ATOMIC_ACQ_REL);
 }
 
+#if !CONFIG_S31SDR_FM_RADIO
 static void rtl_control_task(void *arg);
+#endif
 
 /* Release the dongle and end rtl_task, which owns it. */
 static void rtl_finish(usb_device_handle_t d, bool claimed, rtl_dev_t *r, const char *why)
@@ -249,18 +275,26 @@ static void rtl_task(void *arg)
     rtl_dev_t *r = rtl_open(client, d);
     if (!r) rtl_finish(d, true, NULL, "init failed");
     uint32_t rate = 0, freq = 0;
-    int e = rtl_set_sample_rate(r, RTL_RATE, &rate);
-    e |= rtl_set_freq(r, RTL_FREQ, &freq);
+    double gain = -1;
+    xSemaphoreTake(rtl_mutex, portMAX_DELAY);
+    int e = rtl_set_sample_rate(r, want_rate, &rate);
+    e |= rtl_set_freq(r, want_freq, &freq);
+    if (want_gain >= 0) e |= rtl_set_gain(r, want_gain, &gain);
     e |= rtl_reset_buffer(r);
     cur_rate = rate;
     cur_freq = freq;
-    cur_gain = -1;
+    cur_gain = gain;
     rtl = r;
+    xSemaphoreGive(rtl_mutex);
     printf("@@RTL %s ready in %lld ms%s: %lu S/s, %lu Hz\n", rtl_tuner_name(r),
            (long long)(esp_timer_get_time() - t0) / 1000, e ? " with errors" : "",
            (unsigned long)rate, (unsigned long)freq);
+#if !CONFIG_S31SDR_FM_RADIO
     if (!control_started)                        /* the VITA 49.2 port opens with the first dongle */
         control_started = s31_spawn(rtl_control_task, "rtlctl", 3072, NULL, 5, NULL, 0);
+#else
+    (void)control_started;
+#endif
 
     taskENTER_CRITICAL(&stats_lock);
     rx_errors = 0;
@@ -373,6 +407,7 @@ static int do_freq(uint32_t hz)
     uint32_t act;
     if (rtl_set_freq(rtl, hz, &act)) { rtl_set_freq(rtl, cur_freq, NULL); return -1; }
     cur_freq = act;
+    want_freq = hz;
     ctx_now = true;
     return 0;
 }
@@ -382,6 +417,7 @@ static int do_rate(uint32_t r)
     uint32_t act;
     if (!rtl || !rate_ok(r) || rtl_set_sample_rate(rtl, r, &act)) return -1;
     cur_rate = act;
+    want_rate = r;
     ctx_now = true;
     return 0;
 }
@@ -395,6 +431,7 @@ static int do_gain(double db)
     double act;
     if (rtl_set_gain(rtl, db < 0 ? -1 : db, &act)) return -1;
     cur_gain = act;
+    want_gain = act;
     if (act >= 0) manual_gain = act;
     ctx_now = true;
     return 0;
@@ -419,6 +456,8 @@ bool s31_rtl_command(const char *cmd, char *reply, size_t n)
              (unsigned long)cur_freq, (unsigned long)cur_rate, g);
     return true;
 }
+
+#if !CONFIG_S31SDR_FM_RADIO
 
 /* VITA 49.2 controllee for the RTL stream, as stream.c's is for the S31
  * stream (SoapyVITA49's Control.cpp is the reference). */
@@ -517,6 +556,24 @@ static void rtl_control_task(void *arg)
         be32(out, (type << 28) | (1u << 26) | ((acount++ & 0xF) << 16) | (uint32_t)(o / 4));
         sendto(s, out, o, 0, (struct sockaddr *)&from, fl);
     }
+}
+
+#endif
+
+bool s31_rtl_present(void) { return rtl != NULL; }
+
+bool s31_rtl_tune(uint32_t hz)
+{
+    xSemaphoreTake(rtl_mutex, portMAX_DELAY);
+    int e = do_freq(hz);
+    xSemaphoreGive(rtl_mutex);
+    return e == 0;
+}
+
+void s31_rtl_preset(uint32_t hz, uint32_t rate)
+{
+    want_freq = hz;
+    want_rate = rate;
 }
 
 void s31_usb_start(void)

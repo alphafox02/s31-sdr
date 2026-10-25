@@ -13,6 +13,9 @@ That writes main/local_net.h, builds, flashes and then waits for the board's
 VITA-49 stream. Later runs reuse local_net.h, so `python flash.py` is enough.
 `python flash.py --list` only shows which board would be flashed.
 
+`python flash.py --radio` builds and flashes the FM radio firmware instead
+(sdkconfig.radio, built in build-radio/, with its speech models).
+
 Only ports with the USB IDs this board uses are opened: Espressif's USB
 Serial/JTAG (303a:1001, the DBG port) and the Silicon Labs CP2102N
 (10c4:ea60, the UART port). Other ESP32 boards can use the same chips, so
@@ -130,14 +133,39 @@ def idf(*args):
         sys.exit(f'idf.py {" ".join(args)} failed')
 
 
-def build():
+# The streamer builds in build/ with sdkconfig; the radio in build-radio/,
+# with sdkconfig.radio on top of the defaults.
+RADIO_ARGS = ['-B', 'build-radio', '-D', 'SDKCONFIG=build-radio/sdkconfig',
+              '-D', 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.radio']
+
+
+def build(radio):
+    extra = RADIO_ARGS if radio else []
+    config = os.path.join(HERE, 'build-radio', 'sdkconfig') if radio else os.path.join(HERE, 'sdkconfig')
     try:
-        target = re.search(r'^CONFIG_IDF_TARGET="([^"]*)"', open(os.path.join(HERE, 'sdkconfig')).read(), re.M)
+        target = re.search(r'^CONFIG_IDF_TARGET="([^"]*)"', open(config).read(), re.M)
     except OSError:
         target = None
     if not target or target.group(1) != 'esp32s31':
-        idf('--preview', 'set-target', 'esp32s31')
-    idf('build')
+        idf('--preview', *extra, 'set-target', 'esp32s31')
+    idf(*extra, 'build')
+
+
+def radio_note(bdir):
+    """How to reach the radio just flashed, from its build's settings."""
+    try:
+        cfg = dict(re.findall(r'^(CONFIG_S31SDR_RADIO_\w+)=(.*)$', open(os.path.join(bdir, 'sdkconfig')).read(), re.M))
+    except OSError:
+        cfg = {}
+    if cfg.get('CONFIG_S31SDR_RADIO_WIFI') == 'y':
+        ssid = cfg.get('CONFIG_S31SDR_RADIO_SSID', '').strip('"')
+        pw = cfg.get('CONFIG_S31SDR_RADIO_PASSWORD', '').strip('"')
+        print(f'radio flashed. Join the Wi-Fi hotspot "{ssid}" ' + (f'(password "{pw}") ' if len(pw) >= 8 else '') +
+              'and open http://192.168.4.1')
+    else:
+        print('radio flashed.')
+    if cfg.get('CONFIG_S31SDR_RADIO_VOICE') == 'y':
+        print('Voice: say "Hi ESP", then a command such as "next station".')
 
 
 def check_stream(board, seconds):
@@ -192,6 +220,7 @@ def main():
     ap.add_argument('--no-build', action='store_true', help='flash the existing build as it is')
     ap.add_argument('--no-check', action='store_true', help="don't wait for the stream after flashing")
     ap.add_argument('--list', action='store_true', help='show the board that would be flashed and exit')
+    ap.add_argument('--radio', action='store_true', help='the FM radio firmware instead of the streamer')
     args = ap.parse_args()
     sys.stdout.reconfigure(line_buffering=True)     # keep our lines in order with idf.py's
 
@@ -205,8 +234,8 @@ def main():
             sys.exit('no network addresses yet. Run once with, for example:\n'
                      '    python flash.py --board-ip 192.168.50.20 --host-ip 192.168.50.1')
         board_ip, _, host_ip = net
-        print(f'board {board_ip}, stream to {host_ip}')
-        if host_has_address(host_ip) is False:
+        print(f'board {board_ip}, ' + ('text commands on UDP 4990' if args.radio else f'stream to {host_ip}'))
+        if not args.radio and host_has_address(host_ip) is False:
             print(f'note: no interface on this computer has {host_ip}; give your Ethernet port that '
                   f'address\n      (e.g. sudo ip addr add {host_ip}/24 dev <interface>) or the '
                   f'stream will not arrive')
@@ -218,8 +247,8 @@ def main():
 
     if not args.list:
         if not args.no_build:
-            build()
-        bdir = os.path.join(HERE, 'build')
+            build(args.radio)
+        bdir = os.path.join(HERE, 'build-radio' if args.radio else 'build')
         try:
             with open(os.path.join(bdir, 'flasher_args.json')) as f:
                 fa = json.load(f)
@@ -281,7 +310,9 @@ def main():
     if subprocess.call(cmd, cwd=bdir):
         sys.exit('flashing failed')
     print(f'flashed. Console: idf.py -p {port} monitor')
-    if not args.no_check and not check_stream(board_ip, 30):
+    if args.radio:
+        radio_note(bdir)
+    elif not args.no_check and not check_stream(board_ip, 30):
         sys.exit(1)
 
 

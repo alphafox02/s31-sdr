@@ -13,4 +13,48 @@ menu "s31-sdr"
             a dongle this costs only the idle USB host tasks; turn it off to
             leave the USB host code out of the firmware.
 
+    config S31SDR_FM_RADIO
+        bool "Build the FM radio instead of the streamer"
+        default n
+        select S31SDR_RTL_SDR
+        help
+            A standalone FM broadcast radio: the RTL-SDR on the USB-A port
+            is demodulated on the board and played on its speaker. The
+            BOOT button seeks (a short press up, a long press down), and
+            text commands on UDP port 4990 work when an Ethernet cable is
+            plugged in. The ESP32-S31's own receiver and the VITA-49
+            streams are left out. `python flash.py --radio` builds it.
+
+    config S31SDR_RADIO_WIFI
+        bool "Wi-Fi hotspot with a web remote"
+        depends on S31SDR_FM_RADIO
+        default y
+        select HTTPD_WS_SUPPORT
+        select HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT
+        help
+            The radio starts its own Wi-Fi hotspot. Join it and open
+            http://192.168.4.1 to tune, seek and scan, and to listen on
+            the phone itself.
+
+    config S31SDR_RADIO_SSID
+        string "Hotspot name"
+        depends on S31SDR_RADIO_WIFI
+        default "s31-radio"
+
+    config S31SDR_RADIO_PASSWORD
+        string "Hotspot password (8 characters or more; empty for an open hotspot)"
+        depends on S31SDR_RADIO_WIFI
+        default "s31radio"
+
+    # Not "depends on": the component manager reads this option to decide
+    # whether to fetch ESP-SR, so it has to exist in every build.
+    config S31SDR_RADIO_VOICE
+        bool "Voice commands through the microphone (FM radio build only)"
+        default y if S31SDR_FM_RADIO
+        help
+            Say "Hi ESP", then a command: "next station", "volume up",
+            "ninety nine point five" and so on. Uses Espressif's ESP-SR
+            (its wake word and English command models, kept in the
+            "model" flash partition).
+
 endmenu
