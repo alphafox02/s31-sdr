@@ -17,9 +17,9 @@
 #include "esp_wifi.h"
 #include "esp_task_wdt.h"
 #include "net.h"
+#include "stream.h"
 
 extern void rftest_open_clk(void);
-void s31_stream_main(int channel, int bits);
 
 /* The cert-test library references a command-console parser we don't use. */
 int cmd_parse(int argc, char **argv) { (void)argc; (void)argv; return 0; }
@@ -57,6 +57,7 @@ static void stream_task(void *arg)
 
 void app_main(void)
 {
+    s31_stream_reserve(STREAM_BITS);
     esp_task_wdt_deinit();
     bring_up_phy();
     xTaskCreatePinnedToCore(stream_task, "stream", 8192, NULL, 10, NULL, 1);

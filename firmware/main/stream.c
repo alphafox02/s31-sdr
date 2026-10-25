@@ -57,6 +57,8 @@
 #include "dma_pos.h"
 #include "net.h"
 #include "local_net.h"
+#include "stream.h"
+#include "vrt.h"
 
 extern void adctrig(int count, int mode, int a2, int a3, int a4,
                     int a5, int a6, int a7, int s9, int s10);
@@ -174,6 +176,14 @@ static bool IRAM_ATTR on_partial(parlio_rx_unit_handle_t u, const parlio_rx_even
     return woken == pdTRUE;
 }
 
+bool s31_spawn(TaskFunction_t fn, const char *name, uint32_t stack, void *arg, UBaseType_t prio,
+               TaskHandle_t *handle, BaseType_t core)
+{
+    if (xTaskCreatePinnedToCore(fn, name, stack, arg, prio, handle, core) == pdPASS) return true;
+    printf("@@ERROR task %s not created (%u-byte stack)\n", name, (unsigned)stack);
+    return false;
+}
+
 static void *alloc_outside_window(size_t bytes)
 {
     void *held[8]; int nh = 0;
@@ -252,9 +262,6 @@ static int verify(void)
 }
 
 /* ---- VRT packet building (big-endian words) ---- */
-static void be32(uint8_t *p, uint32_t v) { p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v; }
-static void be64(uint8_t *p, uint64_t v) { be32(p, v >> 32); be32(p + 4, (uint32_t)v); }
-static uint64_t fix20(double v) { return (uint64_t)(int64_t)(v * (double)(1 << 20)); }
 
 static uint16_t ip_csum(const uint8_t *h)
 {
@@ -939,46 +946,6 @@ static void stats_task(void *arg)
  * header and stream ID: CAM, message ID, controllee ID, [controller ID], then
  * CIF0 and fields encoded as in a context packet. An acknowledgement is the
  * same packet type with header bit 26 set. */
-#define CAM_CONTROLLEE_EN  (1u << 31)
-#define CAM_CONTROLLEE_UID (1u << 30)
-#define CAM_CONTROLLER_EN  (1u << 29)
-#define CAM_CONTROLLER_UID (1u << 28)
-#define CAM_NACK_ONLY      (1u << 22)
-#define CAM_REQ_VALIDATION (1u << 20)
-#define CAM_REQ_EXECUTION  (1u << 19)
-#define CAM_REQ_QUERY      (1u << 18)
-#define CAM_ACK_PARTIAL    (1u << 11)
-#define CAM_ACK_EXECUTED   (1u << 10)
-#define CIF0_BW   (1u << 29)
-#define CIF0_IF   (1u << 28)
-#define CIF0_RF   (1u << 27)
-#define CIF0_GAIN (1u << 23)
-#define CIF0_RATE (1u << 21)
-#define CIF0_SE   (1u << 16)          /* State/Event: AGC/MGC enable 28, indicator 16 */
-#define CIF0_FMT  (1u << 15)
-
-static uint32_t rd_be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
-static double rd_fix20(const uint8_t *p)
-{
-    return (double)(int64_t)((uint64_t)rd_be32(p) << 32 | rd_be32(p + 4)) / (double)(1 << 20);
-}
-
-/* Field sizes in words for CIF0 bits 31..0 (VITA 49.0 table 9.1-1). */
-static int cif0_words(int bit)
-{
-    switch (bit) {
-    case 29: case 28: case 27: case 26: case 25: return 2;   /* bw, IF, RF, RF off, IF off */
-    case 24: case 23: case 22: return 1;                     /* ref level, gain, over-range */
-    case 21: case 20: return 2;                               /* sample rate, ts adjust */
-    case 19: case 18: return 1;                               /* ts cal time, temperature */
-    case 17: return 2;                                        /* device ID */
-    case 16: return 1;                                        /* state/event */
-    case 15: return 2;                                        /* data format */
-    default: return -1;                                       /* not handled */
-    }
-}
-
-
 static void vrt_control_task(void *arg)
 {
     int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -1087,6 +1054,18 @@ static void vrt_control_task(void *arg)
     }
 }
 
+/* The capture rings need large contiguous blocks of internal RAM, so they
+ * are taken at boot, before Wi-Fi, Ethernet and USB break the heap up. */
+void s31_stream_reserve(int bits)
+{
+    if (!ring) ring = alloc_outside_window(RING_BYTES);
+    if (!snap) snap = heap_caps_malloc(WIN * 2, MALLOC_CAP_INTERNAL);       /* calibration windows */
+    if (bits == 10) {
+        if (!c_ring) c_ring = alloc_outside_window(C_RING * 2);
+        if (!c_snap) c_snap = heap_caps_malloc(WIN * 2, MALLOC_CAP_INTERNAL);
+    }
+}
+
 void s31_stream_main(int channel, int bits)
 {
     bits10 = bits == 10;
@@ -1107,14 +1086,9 @@ void s31_stream_main(int channel, int bits)
      * calibration, so the bit-exact check runs in the final mode. */
     if (!bits10) printf("stream: 40 MHz filter %s\n", set_width(40) == 0 ? "on" : "REFUSED");
 
-    ring = alloc_outside_window(RING_BYTES);
-    if (ring) dma_pos_init(&ppos, ring, RING_BYTES, NODE, bits10 ? 40 : 80);   /* bytes per us */
-    snap = heap_caps_malloc(WIN * 2, MALLOC_CAP_INTERNAL);       /* calibration windows */
-    if (bits10) {
-        c_ring = alloc_outside_window(C_RING * 2);
-        c_snap = heap_caps_malloc(WIN * 2, MALLOC_CAP_INTERNAL);
-    }
+    s31_stream_reserve(bits);                                    /* normally done at boot */
     if (!ring || !snap || (bits10 && (!c_ring || !c_snap))) { printf("stream: buffer alloc failed\n"); return; }
+    dma_pos_init(&ppos, ring, RING_BYTES, NODE, bits10 ? 40 : 80);   /* bytes per us */
 
     /* 10-bit: the camera unit makes the 20 MHz sample clock on PCLK_PAD and
      * both units sample on that pad, so they latch the same bus sample.
@@ -1204,10 +1178,10 @@ void s31_stream_main(int channel, int bits)
     eth = s31_net_eth_handle();
     if (bits10) { double act; tune_hz(lo_get(), &act); }   /* exact word, as the monitor expects */
     radio_mutex = xSemaphoreCreateMutex();
-    xTaskCreatePinnedToCore(monitor_task, "radiomon", 3072, NULL, 4, NULL, 0);
+    s31_spawn(monitor_task, "radiomon", 3072, NULL, 4, NULL, 0);
     stats_q = xQueueCreate(1, sizeof(struct stats));
-    xTaskCreatePinnedToCore(stats_task, "vrtstats", 4096, NULL, 2, NULL, 0);
-    xTaskCreatePinnedToCore(sender_task, "vrt", 6144, NULL, 20, &sender, 1);
-    xTaskCreatePinnedToCore(control_task, "vrtctl", 4096, NULL, 5, NULL, 0);
-    xTaskCreatePinnedToCore(vrt_control_task, "vrt49.2", 4096, NULL, 5, NULL, 0);
+    s31_spawn(stats_task, "vrtstats", 4096, NULL, 2, NULL, 0);
+    s31_spawn(sender_task, "vrt", 6144, NULL, 20, &sender, 1);
+    s31_spawn(control_task, "vrtctl", 4096, NULL, 5, NULL, 0);
+    s31_spawn(vrt_control_task, "vrt49.2", 4096, NULL, 5, NULL, 0);
 }
